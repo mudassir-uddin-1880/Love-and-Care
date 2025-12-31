@@ -1,0 +1,15 @@
+# Sensitive files
+quickbooks_tokens.json
+*.json
+!package.json
+
+# Environment files
+.env
+.env.local
+
+# Node modules (if applicable)
+node_modules/
+
+# IDE files
+.vscode/
+.idea/
