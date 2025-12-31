@@ -1,0 +1,120 @@
+## -------------------- DATE CALCULATION: PREVIOUS WEEK (Monday-Sunday) ----------------------
+#set($today = $date.getSystemDate())
+#set($todayStr = $date.format("yyyy-MM-dd", $today))
+
+#set($parts = $todayStr.split("-"))
+#set($year = $math.toInteger($parts[0]))
+#set($month = $math.toInteger($parts[1]))
+#set($day = $math.toInteger($parts[2]))
+
+#set($daysInMonth = {"1":31,"2":28,"3":31,"4":30,"5":31,"6":30,"7":31,"8":31,"9":30,"10":31,"11":30,"12":31})
+#set($yearMod400 = $year % 400)
+#set($yearMod4 = $year % 4)
+#set($yearMod100 = $year % 100)
+#if($yearMod400 == 0 || ($yearMod4 == 0 && $yearMod100 != 0))
+  #set($void = $daysInMonth.put("2", 29))
+#end
+
+#set($dow = $math.toInteger($date.format("u", $today)))
+#set($daysToLastMonday = $dow - 1 + 7)
+#if($dow == 1)
+  #set($daysToLastMonday = 7)
+#end
+
+#set($fromDay = $day - $daysToLastMonday)
+#set($fromMonth = $month)
+#set($fromYear = $year)
+
+#foreach($i in [1..12])
+  #if($fromDay < 1)
+    #set($fromMonth = $fromMonth - 1)
+    #if($fromMonth < 1)
+      #set($fromMonth = 12)
+      #set($fromYear = $fromYear - 1)
+    #end
+    #set($dim = $daysInMonth.get("$fromMonth"))
+    #set($fromDay = $fromDay + $dim)
+  #end
+#end
+
+#set($fromMonthStr = "$fromMonth")
+#if($fromMonth < 10)
+  #set($fromMonthStr = "0$fromMonth")
+#end
+#set($fromDayStr = "$fromDay")
+#if($fromDay < 10)
+  #set($fromDayStr = "0$fromDay")
+#end
+#set($fromDateStr = "$fromYear-$fromMonthStr-$fromDayStr")
+
+#set($toDay = $fromDay + 6)
+#set($toMonth = $fromMonth)
+#set($toYear = $fromYear)
+
+#foreach($i in [1..12])
+  #set($dim = $daysInMonth.get("$toMonth"))
+  #if($toDay > $dim)
+    #set($toDay = $toDay - $dim)
+    #set($toMonth = $toMonth + 1)
+    #if($toMonth > 12)
+      #set($toMonth = 1)
+      #set($toYear = $toYear + 1)
+    #end
+  #end
+#end
+
+#set($toMonthStr = "$toMonth")
+#if($toMonth < 10)
+  #set($toMonthStr = "0$toMonth")
+#end
+#set($toDayStr = "$toDay")
+#if($toDay < 10)
+  #set($toDayStr = "0$toDay")
+#end
+#set($toDateStr = "$toYear-$toMonthStr-$toDayStr")
+
+#set($monthNames = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"])
+#set($fromMonthName = $monthNames.get($fromMonth))
+#set($toMonthName = $monthNames.get($toMonth))
+
+## -------------------- QUERY DATA FOR TOTALS ----------------------
+#set($serviceType1 = "SVC_TYPE_3")
+#set($incFields1 = ["Expected_Hours", "Actual_Hours"])
+#set($filters1 = {})
+#set($dateCrit1 = {"fieldName" : "Schedule_Start_Date", "fromDate" : $fromDateStr, "toDate" : $toDateStr})
+#set($filters1.dateCriteria = $dateCrit1)
+#set($fieldsFilter1 = {"Record_Status" : "Active", "Shift_Status" : "Scheduled"})
+#set($filters1.fields = $fieldsFilter1)
+#set($list1 = $dataReader.filter($serviceType1, $incFields1, $filters1))
+
+#set($totalHours = 0.0)
+#set($totalShifts = 0)
+#if($list1)
+  #foreach($shift in $list1)
+    #set($totalShifts = $totalShifts + 1)
+    #if($shift.fields.has("Actual_Hours") && $shift.fields.Actual_Hours.has("value") && !$shift.fields.Actual_Hours.isNull("value") && $shift.fields.Actual_Hours.value != "" && $shift.fields.Actual_Hours.value != 0)
+      #set($hoursStr = "$shift.fields.Actual_Hours.value")
+      #set($hours = $dataReader.convertStringToNumber($hoursStr))
+      #set($totalHours = $totalHours + $hours)
+    #elseif($shift.fields.has("Expected_Hours") && $shift.fields.Expected_Hours.has("value") && !$shift.fields.Expected_Hours.isNull("value") && $shift.fields.Expected_Hours.value != "")
+      #set($hoursStr = "$shift.fields.Expected_Hours.value")
+      #set($hours = $dataReader.convertStringToNumber($hoursStr))
+      #set($totalHours = $totalHours + $hours)
+    #end
+  #end
+#end
+
+Dear Team,<p>
+<p>
+Please find attached the Weekly Shift Hours Report for the period of $fromMonthName $fromDay to $toMonthName $toDay, $fromYear.
+<p>
+
+Report Summary:<br>
+========================================<br>
+Report Period: $fromDateStr to $toDateStr<br>
+Total Shifts Completed: $totalShifts<br>
+Total Hours: $totalHours<br>
+Report Generated: $dateTimeUtil.formatDateString($todayStr, "yyyy-MM-dd", "MMMM dd, yyyy")<br>
+<p><p>
+Best regards,<br>
+Love & Care

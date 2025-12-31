@@ -1,0 +1,659 @@
+{
+    "clientSchedules": {
+        "data": [
+            {
+                "id": "68e8a2fc6043b7a95c7927b9",
+                "refId": "68e78dd46043b73ad66fa5e3",
+                "txnId": "BBOV3KWADI",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Saturday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540569,
+                "modifiedOn": 1760076540569,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fc6043b7a95c7927b7",
+                "refId": "68e78dd46043b73ad66fa5e2",
+                "txnId": "WIDJQPUNB4",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Tuesday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540581,
+                "modifiedOn": 1760076540581,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fc6043b7a95c7927bc",
+                "refId": "68e78dd46043b73ad66fa5e3",
+                "txnId": "BBOV3KWADI",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Friday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540579,
+                "modifiedOn": 1760076540579,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fc6043b7a95c7927bb",
+                "refId": "68e78dd46043b73ad66fa5ec",
+                "txnId": "QSVN5CSTUY",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Monday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540579,
+                "modifiedOn": 1760076540579,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fc6043b7a95c7927bd",
+                "refId": "68e78dd46043b73ad66fa5e2",
+                "txnId": "WIDJQPUNB4",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Saturday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540578,
+                "modifiedOn": 1760076540578,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fc6043b7a95c7927be",
+                "refId": "68e78dd46043b73ad66fa5e2",
+                "txnId": "WIDJQPUNB4",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Sunday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540562,
+                "modifiedOn": 1760076540562,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fc6043b7a95c7927bf",
+                "refId": "68e78dd46043b73ad66fa5e2",
+                "txnId": "WIDJQPUNB4",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Friday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540562,
+                "modifiedOn": 1760076540562,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fc6043b7a95c7927c0",
+                "refId": "68e78dd46043b73ad66fa5e3",
+                "txnId": "BBOV3KWADI",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Monday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540559,
+                "modifiedOn": 1760076540559,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fc6043b7a95c7927c2",
+                "refId": "68e78dd46043b73ad66fa5e2",
+                "txnId": "WIDJQPUNB4",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Wednesday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540562,
+                "modifiedOn": 1760076540562,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fc6043b7a95c7927c1",
+                "refId": "68e78dd46043b73ad66fa5e3",
+                "txnId": "BBOV3KWADI",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Tuesday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540562,
+                "modifiedOn": 1760076540562,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fc6043b7a95c7927c3",
+                "refId": "68e78dd46043b73ad66fa5e3",
+                "txnId": "BBOV3KWADI",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Sunday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540560,
+                "modifiedOn": 1760076540560,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fc6043b7a95c7927c4",
+                "refId": "68e78dd46043b73ad66fa5e3",
+                "txnId": "BBOV3KWADI",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Thursday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540561,
+                "modifiedOn": 1760076540561,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fc6043b7a95c7927c6",
+                "refId": "68e78dd46043b73ad66fa5e2",
+                "txnId": "WIDJQPUNB4",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Monday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540568,
+                "modifiedOn": 1760076540568,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fc6043b7a95c7927c5",
+                "refId": "68e78dd46043b73ad66fa5e2",
+                "txnId": "WIDJQPUNB4",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Thursday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076540569,
+                "modifiedOn": 1760076540569,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fd6043b7a95c7927ca",
+                "refId": "68e78dd46043b73ad66fa5ec",
+                "txnId": "QSVN5CSTUY",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Saturday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "7:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076541870,
+                "modifiedOn": 1760076541870,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fd6043b7a95c7927cb",
+                "refId": "68e78dd46043b73ad66fa5ec",
+                "txnId": "QSVN5CSTUY",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Sunday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "7:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076541871,
+                "modifiedOn": 1760076541871,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fe6043b7a95c7927d3",
+                "refId": "68e78dd46043b73ad66fa5ec",
+                "txnId": "QSVN5CSTUY",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Friday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "7:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076542035,
+                "modifiedOn": 1760076542035,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fe6043b7a95c7927d8",
+                "refId": "68e78dd46043b73ad66fa5e3",
+                "txnId": "BBOV3KWADI",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Wednesday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076542135,
+                "modifiedOn": 1760076542135,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fe6043b7a95c7927d9",
+                "refId": "68e78dd46043b73ad66fa5ec",
+                "txnId": "QSVN5CSTUY",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Tuesday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "0:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076542067,
+                "modifiedOn": 1760076542067,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fe6043b7a95c7927dd",
+                "refId": "68e78dd46043b73ad66fa5ec",
+                "txnId": "QSVN5CSTUY",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Wednesday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "7:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076542244,
+                "modifiedOn": 1760076542244,
+                "modifiedBy": "Client Table Data Update"
+            },
+            {
+                "id": "68e8a2fe6043b7a95c7927e4",
+                "refId": "68e78dd46043b73ad66fa5ec",
+                "txnId": "QSVN5CSTUY",
+                "refType": "SVC_TYPE_2",
+                "state": "ACTIVE",
+                "fields": {
+                    "Day": {
+                        "type": "singleChoiceUiTemplate",
+                        "value": "Thursday"
+                    },
+                    "Schedule_Start_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "7:00"
+                    },
+                    "Schedule_End_Time": {
+                        "type": "editTextUiTemplate",
+                        "value": "23:59"
+                    },
+                    "Expected_Hours": {
+                        "type": "editTextUiTemplate",
+                        "value": ""
+                    }
+                },
+                "refTableId": "68a4441312e48bf5bbd3a68c",
+                "businessId": "6892deee12e48bde73cb5cbe",
+                "createdBy": "Client Table Data Update",
+                "createdOn": 1760076542477,
+                "modifiedOn": 1760076542477,
+                "modifiedBy": "Client Table Data Update"
+            }
+        ],
+        "statusCode": 0,
+        "statusMessage": "SUCCESS"
+    }
+}

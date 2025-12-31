@@ -1,0 +1,59 @@
+app_lib.hideField([
+        "Shift_Details",
+        "Availability_Details",
+        "MONDAY_AM",
+        "MONDAY_PM",
+        "MONDAY_NOC",
+        "TUESDAY_AM",
+        "TUESDAY_PM",
+        "TUESDAY_NOC",
+        "WEDNESDAY_AM",
+        "WEDNESDAY_PM",
+        "WEDNESDAY_NOC",
+        "THURSDAY_AM",
+        "THURSDAY_PM",
+        "THURSDAY_NOC",
+        "FRIDAY_AM",
+        "FRIDAY_PM",
+        "FRIDAY_NOC",
+        "SATURDAY_AM",
+        "SATURDAY_PM",
+        "SATURDAY_NOC",
+        "SUNDAY_AM",
+        "SUNDAY_PM",
+        "SUNDAY_NOC",
+    ]);
+
+if (fields["Employment_Type"].value == "Caregiver" && fields["Availability_Type"].value == "AM, PM, NOC") {
+    app_lib.showField([
+        "Shift_Details",
+        "MONDAY_AM",
+        "MONDAY_PM",
+        "MONDAY_NOC",
+        "TUESDAY_AM",
+        "TUESDAY_PM",
+        "TUESDAY_NOC",
+        "WEDNESDAY_AM",
+        "WEDNESDAY_PM",
+        "WEDNESDAY_NOC",
+        "THURSDAY_AM",
+        "THURSDAY_PM",
+        "THURSDAY_NOC",
+        "FRIDAY_AM",
+        "FRIDAY_PM",
+        "FRIDAY_NOC",
+        "SATURDAY_AM",
+        "SATURDAY_PM",
+        "SATURDAY_NOC",
+        "SUNDAY_AM",
+        "SUNDAY_PM",
+        "SUNDAY_NOC",
+    ]);
+}
+
+if (fields["Employment_Type"].value == "Caregiver" && fields["Availability_Type"].value == "Custom Time") {
+    app_lib.showField([
+        "Shift_Details",
+        "Availability_Details",
+    ]);
+}

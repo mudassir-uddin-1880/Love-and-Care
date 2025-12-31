@@ -1,0 +1,301 @@
+## -------------------- DATE CALCULATION: PREVIOUS WEEK (Monday-Sunday) ----------------------
+#set($today = $date.getSystemDate())
+#set($todayStr = $date.format("yyyy-MM-dd", $today))
+
+#set($parts = $todayStr.split("-"))
+#set($year = $math.toInteger($parts[0]))
+#set($month = $math.toInteger($parts[1]))
+#set($day = $math.toInteger($parts[2]))
+
+#set($daysInMonth = {"1":31,"2":28,"3":31,"4":30,"5":31,"6":30,"7":31,"8":31,"9":30,"10":31,"11":30,"12":31})
+#set($yearMod400 = $year % 400)
+#set($yearMod4 = $year % 4)
+#set($yearMod100 = $year % 100)
+#if($yearMod400 == 0 || ($yearMod4 == 0 && $yearMod100 != 0))
+#set($void = $daysInMonth.put("2", 29))
+#end
+
+#set($dow = $math.toInteger($date.format("u", $today)))
+#set($daysToLastMonday = $dow - 1 + 7)
+#if($dow == 1)
+#set($daysToLastMonday = 7)
+#end
+
+#set($fromDay = $day - $daysToLastMonday)
+#set($fromMonth = $month)
+#set($fromYear = $year)
+
+#foreach($i in [1..12])
+#if($fromDay < 1) #set($fromMonth=$fromMonth - 1) #if($fromMonth < 1) #set($fromMonth=12) #set($fromYear=$fromYear - 1)
+  #end #set($dim=$daysInMonth.get("$fromMonth")) #set($fromDay=$fromDay + $dim) #end #end
+  #set($fromMonthStr="$fromMonth" ) #if($fromMonth < 10) #set($fromMonthStr="0$fromMonth" ) #end
+  #set($fromDayStr="$fromDay" ) #if($fromDay < 10) #set($fromDayStr="0$fromDay" ) #end
+  #set($fromDateStr="$fromYear-$fromMonthStr-$fromDayStr" ) #set($toDay=$fromDay + 6) #set($toMonth=$fromMonth)
+  #set($toYear=$fromYear) #foreach($i in [1..12]) #set($dim=$daysInMonth.get("$toMonth")) #if($toDay> $dim)
+  #set($toDay = $toDay - $dim)
+  #set($toMonth = $toMonth + 1)
+  #if($toMonth > 12)
+  #set($toMonth = 1)
+  #set($toYear = $toYear + 1)
+  #end
+  #end
+  #end
+
+  #set($toMonthStr = "$toMonth")
+  #if($toMonth < 10) #set($toMonthStr="0$toMonth" ) #end #set($toDayStr="$toDay" ) #if($toDay < 10)
+    #set($toDayStr="0$toDay" ) #end #set($toDateStr="$toYear-$toMonthStr-$toDayStr" ) ## Format dates for display
+    #set($monthNames=["", "January" , "February" , "March" , "April" , "May" , "June" , "July" , "August" , "September"
+    , "October" , "November" , "December" ]) #set($fromMonthName=$monthNames.get($fromMonth))
+    #set($toMonthName=$monthNames.get($toMonth)) ## -------------------- QUERY DATA ----------------------
+    #set($serviceType1="SVC_TYPE_3" ) #set($incFields1=["Client_Name", "Expected_Caregiver" , "Day"
+    , "Schedule_Start_Date" , "Schedule_Start_Time" , "Schedule_End_Time" , "Actual_Caregiver" , "CheckIn_Time"
+    , "CheckOut_Time" , "Expected_Hours" , "Actual_Hours" , "Notes_for_Schedule" , "Enhanced_Note" , "Shift_Status"
+    ,"Scheduling_Status", "Caregiver_Score_" ]) #set($filters1={}) #set($dateCrit1={"fieldName" : "Schedule_Start_Date"
+    , "fromDate" : $fromDateStr, "toDate" : $toDateStr}) #set($filters1.dateCriteria=$dateCrit1)
+    #set($fieldsFilter1={"Record_Status" : "Active" , "Shift_Status" : "Scheduled" })
+    #set($filters1.fields=$fieldsFilter1) #set($sorts1=[{"sortOn":"Schedule_Start_Date", "sortBy" :"ASC"},
+    {"sortOn":"Expected_Caregiver", "sortBy" :"ASC"}]) #set($filters1.sorts=$sorts1)
+    #set($list1=$dataReader.filter($serviceType1, $incFields1, $filters1)) ## Calculate total hours first
+    #set($totalHours=0.0) #set($totalShifts=0) #if($list1) #foreach($shift in $list1) #set($totalShifts=$totalShifts +
+    1) #if($shift.fields.has("Actual_Hours") && $shift.fields.Actual_Hours.has("value") &&
+    !$shift.fields.Actual_Hours.isNull("value") && $shift.fields.Actual_Hours.value !="" &&
+    $shift.fields.Actual_Hours.value !=0) #set($hoursStr="$shift.fields.Actual_Hours.value" )
+    #set($hours=$dataReader.convertStringToNumber($hoursStr)) #set($totalHours=$totalHours + $hours)
+    #elseif($shift.fields.has("Expected_Hours") && $shift.fields.Expected_Hours.has("value") &&
+    !$shift.fields.Expected_Hours.isNull("value") && $shift.fields.Expected_Hours.value !="" )
+    #set($hoursStr="$shift.fields.Expected_Hours.value" ) #set($hours=$dataReader.convertStringToNumber($hoursStr))
+    #set($totalHours=$totalHours + $hours) #end #end #end ## -------------------- HEADER SECTION ----------------------
+    <table
+    style="width: 100%; border-collapse: collapse; margin-bottom: 15px; font-family: 'Segoe UI', Arial, sans-serif;">
+    <tr>
+      <td style="width: 15%; text-align: left; vertical-align: middle; padding: 8px;">
+        <img height="50px" src="https://stage.kellton.net/content/stage/6892deee12e48bde73cb5cbe/1763533494135.png"
+          alt="Love & Care Logo">
+      </td>
+      <td style="width: 60%; text-align: center; vertical-align: middle; padding: 8px;">
+        <span style="font-size: 20px; font-weight: bold; color: #1f2937; display: block; margin-bottom: 3px;">Shift
+          Hours Report</span>
+        <span style="font-size: 14px; color: #6b7280; display: block;">$fromMonthName $fromDay - $toMonthName $toDay,
+          $fromYear</span>
+      </td>
+      <td
+        style="width: 25%; text-align: right; vertical-align: top; padding: 10px; background-color: #fce7f3; border-left: 3px solid #db2777;">
+        <table style="width: 100%; border-collapse: collapse;">
+          <tr>
+            <td style="padding: 3px 0;">
+              <span style="font-size: 10px; color: #6b7280; text-transform: uppercase; display: block;">Year</span>
+              <span style="font-size: 13px; font-weight: bold; color: #1f2937; display: block;">$fromYear</span>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 3px 0;">
+              <span style="font-size: 10px; color: #6b7280; text-transform: uppercase; display: block;">Report
+                Period</span>
+              <span style="font-size: 12px; font-weight: bold; color: #1f2937; display: block;">$fromMonthName $fromDay
+                - $toDay</span>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 5px 0 0 0;">
+              <span style="font-size: 14px; font-weight: bold; color: #db2777; display: block;">TOTAL HOURS:</span>
+              <span style="font-size: 14px; font-weight: bold; color: #db2777; display: block;">$totalHours</span>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+    </table>
+
+    ## -------------------- DATA TABLE ----------------------
+    <table style="width: 100%; border-collapse: collapse; font-size: 11px; font-family: 'Segoe UI', Arial, sans-serif;">
+      <colgroup>
+        <col style="width: 10%;">
+        <col style="width: 10%;">
+        <col style="width: 9%;">
+        <col style="width: 11%;">
+        <col style="width: 11%;">
+        <col style="width: 5%;">
+        <col style="width: 10%;">
+        <col style="width: 34%;">
+      </colgroup>
+      <thead>
+        <tr>
+          <th
+            style="background-color: #db2777; color: white; padding: 8px 6px; text-align: left; font-weight: 600; border: 1px solid #c026d3; font-size: 12px;">
+            Caregiver</th>
+          <th
+            style="background-color: #db2777; color: white; padding: 8px 6px; text-align: left; font-weight: 600; border: 1px solid #c026d3; font-size: 12px;">
+            Date</th>
+          <th
+            style="background-color: #db2777; color: white; padding: 8px 6px; text-align: left; font-weight: 600; border: 1px solid #c026d3; font-size: 12px;">
+            Day</th>
+          <th
+            style="background-color: #db2777; color: white; padding: 8px 6px; text-align: left; font-weight: 600; border: 1px solid #c026d3; font-size: 12px;">
+            Start Time</th>
+          <th
+            style="background-color: #db2777; color: white; padding: 8px 6px; text-align: left; font-weight: 600; border: 1px solid #c026d3; font-size: 12px;">
+            End Time</th>
+          <th
+            style="background-color: #db2777; color: white; padding: 8px 6px; text-align: center; font-weight: 600; border: 1px solid #c026d3; font-size: 12px;">
+            Hours</th>
+          <th
+            style="background-color: #db2777; color: white; padding: 8px 6px; text-align: left; font-weight: 600; border: 1px solid #c026d3; font-size: 12px;">
+            Customer</th>
+          <th
+            style="background-color: #db2777; color: white; padding: 8px 6px; text-align: left; font-weight: 600; border: 1px solid #c026d3; font-size: 12px;">
+            Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+
+        #set($rowCount = 0)
+
+        #if(!$list1 || $list1.size() == 0)
+        <tr>
+          <td colspan="8"
+            style="text-align: center; padding: 30px; color: #9ca3af; font-style: italic; border: 1px solid #e5e7eb;">
+            No shifts found for the period $fromDateStr to $toDateStr
+          </td>
+        </tr>
+        #else
+        #foreach($shift in $list1)
+        #set($rowCount = $rowCount + 1)
+
+        ## Extract Caregiver Name
+        #set($caregiverName = "Unknown")
+        #if($shift.fields.has("Actual_Caregiver") && $shift.fields.Actual_Caregiver.has("value") &&
+        !$shift.fields.Actual_Caregiver.isNull("value") && $shift.fields.Actual_Caregiver.value != "")
+        #set($caregiverName = $shift.fields.Actual_Caregiver.value)
+        #elseif($shift.fields.has("Expected_Caregiver") && $shift.fields.Expected_Caregiver.has("value") &&
+        !$shift.fields.Expected_Caregiver.isNull("value") && $shift.fields.Expected_Caregiver.value != "")
+        #set($caregiverName = $shift.fields.Expected_Caregiver.value)
+        #end
+
+        ## Extract Date
+        #set($shiftDateFormatted = "")
+        #if($shift.fields.has("Schedule_Start_Date") && $shift.fields.Schedule_Start_Date.has("value"))
+        #set($rawDate = $shift.fields.Schedule_Start_Date.value)
+        #set($dateParts = $rawDate.split("-"))
+        #if($dateParts.size() == 3)
+        #set($shiftDateFormatted = "$dateParts[1]/$dateParts[2]/$dateParts[0]")
+        #end
+        #end
+
+        ## Extract Day of Week
+        #set($dayOfWeek = "")
+        #if($shift.fields.has("Day") && $shift.fields.Day.has("value"))
+        #set($dayOfWeek = $shift.fields.Day.value)
+        #end
+
+        ## Extract Start Time
+        #set($startTime = "")
+        #if($shift.fields.has("CheckIn_Time") && $shift.fields.CheckIn_Time.has("value") &&
+        !$shift.fields.CheckIn_Time.isNull("value") && $shift.fields.CheckIn_Time.value != "")
+        #set($startTime = $shift.fields.CheckIn_Time.value)
+        #elseif($shift.fields.has("Schedule_Start_Time") && $shift.fields.Schedule_Start_Time.has("value") &&
+        $shift.fields.Schedule_Start_Time.value != "")
+        #set($startTime = $shift.fields.Schedule_Start_Time.value)
+        #end
+
+        ## Extract End Time
+        #set($endTime = "")
+        #if($shift.fields.has("CheckOut_Time") && $shift.fields.CheckOut_Time.has("value") &&
+        !$shift.fields.CheckOut_Time.isNull("value") && $shift.fields.CheckOut_Time.value != "")
+        #set($endTime = $shift.fields.CheckOut_Time.value)
+        #elseif($shift.fields.has("Schedule_End_Time") && $shift.fields.Schedule_End_Time.has("value") &&
+        $shift.fields.Schedule_End_Time.value != "")
+        #set($endTime = $shift.fields.Schedule_End_Time.value)
+        #end
+
+
+        ## Extract Hours
+        #set($hoursDisplay = "0.00")
+        #if($shift.fields.has("Actual_Hours") && $shift.fields.Actual_Hours.has("value") &&
+        !$shift.fields.Actual_Hours.isNull("value") && $shift.fields.Actual_Hours.value != "" &&
+        $shift.fields.Actual_Hours.value != 0)
+        #set($hoursDisplay = "$shift.fields.Actual_Hours.value")
+        #elseif($shift.fields.has("Expected_Hours") && $shift.fields.Expected_Hours.has("value") &&
+        !$shift.fields.Expected_Hours.isNull("value") && $shift.fields.Expected_Hours.value != "")
+        #set($hoursDisplay = "$shift.fields.Expected_Hours.value")
+        #end
+
+        ## Extract Customer Name
+        #set($customerName = "")
+        #if($shift.fields.has("Client_Name") && $shift.fields.Client_Name.has("value") &&
+        !$shift.fields.Client_Name.isNull("value") && $shift.fields.Client_Name.value != "")
+        #set($customerName = $shift.fields.Client_Name.value)
+        #end
+
+        ## Extract Enhanced Notes
+        #set($notes = "")
+        #if($shift.fields.has("Enhanced_Note") && $shift.fields.Enhanced_Note.has("value") &&
+        !$shift.fields.Enhanced_Note.isNull("value") && $shift.fields.Enhanced_Note.value != "")
+        
+        ## Decrypt the Enhanced_Note field
+        #set($serviceType = 'SVC_TYPE_3')
+        #set($decryptedValue = $dataReader.decryptValue($serviceType, "Enhanced_Note", $shift.fields.Enhanced_Note.value))
+        #set($notes = $decryptedValue.trim())
+        
+        #end
+
+        ## Row background
+        #set($rowBg = "#ffffff")
+        #set($isEven = $rowCount % 2)
+        #if($isEven == 0)
+        #set($rowBg = "#f9fafb")
+        #end
+
+        <tr style="background-color: $rowBg;">
+          <td
+            style="padding: 8px; border: 1px solid #e5e7eb; color: #374151; vertical-align: top; font-size: 11px; line-height: 1.4;">
+            $caregiverName</td>
+          <td
+            style="padding: 8px; border: 1px solid #e5e7eb; color: #374151; vertical-align: top; font-size: 9px; line-height: 1.4;">
+            $shiftDateFormatted</td>
+          <td
+            style="padding: 8px; border: 1px solid #e5e7eb; color: #374151; vertical-align: top; font-size: 11px; line-height: 1.4;">
+            $dayOfWeek</td>
+          <td
+            style="padding: 8px; border: 1px solid #e5e7eb; color: #374151; vertical-align: top; font-size: 10px; line-height: 1.4;">
+            $startTime</td>
+          <td
+            style="padding: 8px; border: 1px solid #e5e7eb; color: #374151; vertical-align: top; font-size: 10px; line-height: 1.4;">
+            $endTime</td>
+          <td
+            style="padding: 8px; border: 1px solid #e5e7eb; color: #374151; vertical-align: top; font-size: 11px; font-weight: bold; text-align: center; line-height: 1.4;">
+            $hoursDisplay</td>
+          <td
+            style="padding: 8px; border: 1px solid #e5e7eb; color: #374151; vertical-align: top; font-size: 11px; line-height: 1.4;">
+            $customerName</td>
+          <td
+            style="padding: 8px; border: 1px solid #e5e7eb; color: #374151; vertical-align: top; font-size: 10px; line-height: 1.4; word-wrap: break-word; overflow-wrap: break-word;">
+            $notes</td>
+        </tr>
+        #end
+
+        ## Total Row
+        <tr style="background-color: #fce7f3;">
+          <td colspan="5"
+            style="text-align: right; padding: 10px 15px; border: 1px solid #db2777; color: #831843; font-size: 13px; font-weight: bold;">
+            TOTAL HOURS:</td>
+          <td colspan="3"
+            style="padding: 10px; border: 1px solid #db2777; color: #831843; font-size: 13px; font-weight: bold;">
+            $totalHours</td>
+        </tr>
+        #end
+
+      </tbody>
+    </table>
+    </br></br>
+    <table
+      style="margin-top: 20px; padding: 12px; background-color: #f9fafb; border-left: 4px solid #db2777; font-size: 11px; color: #6b7280; width: 100%; border-collapse: collapse; font-family: 'Segoe UI', Arial, sans-serif;">
+      <tr>
+        <td style="line-height: 1.6;">
+          <strong>Report Generated:</strong> $dateTimeUtil.formatDateString($todayStr, "yyyy-MM-dd", "MMMM dd,
+          yyyy")<br />
+          <strong>Report Period:</strong> $fromDateStr to $toDateStr (Previous Week: Monday - Sunday)<br />
+          <strong>Total Shifts:</strong> $totalShifts<br />
+          <strong>Total Hours:</strong> $totalHours<br />
+        </td>
+      </tr>
+    </table>

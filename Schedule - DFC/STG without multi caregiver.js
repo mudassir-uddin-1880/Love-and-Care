@@ -1,0 +1,3115 @@
+var settingsrecords = input.settingsrecords || [];
+var settingsTableData = input.settingsTableData || [];
+var currDate = input.currDate;
+var actualSchedulingData = input.actualSchedulingData;
+var leavesData = input.leavesData || [];
+var employeesDetails = input.employeesDetails || [];
+var allClientsScheduleData = input.allClientsScheduleData || [];
+var clientSchedules = input.clientSchedules || { data: [] };
+var clientLeaves = input.clientLeaves || { data: [] };
+var caregiverAvailability = input.caregiverAvailability || [];
+
+var result = {
+    debug: { inputCurrDate: currDate },
+    conflicts: { total: 0, details: [] },
+    availabilityIssues: { total: 0, details: [] },
+    conflictsAndAvailabilityIssues: [],
+    allClientAssignments: [],
+    globalSummary: {},
+    caregiverUtilization: {}
+};
+
+var globalCaregiverTimeSlots = {};
+var ghostShifts = [];
+var historicalCountCache = {}; // Memoization cache
+
+// ---------------------------------------------------------------------------
+// UTILITY FUNCTIONS
+// ---------------------------------------------------------------------------
+function dateObjToISO(y, m, d) {
+    function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+    return y + '-' + pad2(m) + '-' + pad2(d);
+
+}
+function getCaregiverWorkedHoursThisWeek(caregiverName, actualSchedulingData, weekStartDate, weekEndDate) {
+    var total = 0;
+    var cgNorm = normName(caregiverName);
+    for (var i = 0; i < actualSchedulingData.length; i++) {
+        var rec = actualSchedulingData[i];
+        if (!rec || !rec.fields) continue;
+        var f = rec.fields;
+        if (normName(safeGetValue(f, 'Actual_Caregiver.value', '')) !== cgNorm) continue;
+        var status = safeGetValue(f, 'Scheduling_Status.value', '');
+        if (status !== 'Approved' && status !== 'Completed' && status !== 'Scheduled Completed') continue;
+        var sDate = safeGetValue(f, 'Schedule_Start_Date.value', '');
+        if (!sDate || sDate < weekStartDate || sDate > weekEndDate) continue;
+        var hours = safeParseNumber(safeGetValue(f, 'Actual_Hours.value', 0), 0);
+        total += hours;
+    }
+    return total;
+}
+
+function safeGetValue(obj, path, defaultValue) {
+    if (!obj) return defaultValue;
+    var keys = path.split('.');
+    var current = obj;
+    for (var i = 0; i < keys.length; i++) {
+        if (current == null || typeof current !== 'object') return defaultValue;
+        current = current[keys[i]];
+    }
+    return current == null ? defaultValue : current;
+}
+
+function normStr(v) {
+    if (v == null) return '';
+    return String(v).replace(/\s+/g, ' ').trim();
+}
+
+function normName(v) {
+    return normStr(v).toLowerCase();
+}
+
+function isArray(a) {
+    return Object.prototype.toString.call(a) === '[object Array]';
+}
+
+function safeParseNumber(value, defaultValue) {
+    if (typeof value === 'number' && !isNaN(value)) return value;
+    var parsed = parseFloat(value);
+    return isNaN(parsed) ? (defaultValue || 0) : parsed;
+}
+
+function parseList(v) {
+    var s = normStr(v);
+    if (!s) return [];
+    return s.split(/[,;/\n]+/).map(function (x) { return normStr(x).toLowerCase(); }).filter(Boolean);
+}
+
+function parseTime(timeStr) {
+    if (!timeStr) return null;
+    var cleanTime = normStr(timeStr).replace(/[^0-9:]/g, '');
+    var parts = cleanTime.split(':');
+    if (parts.length >= 2) {
+        var hours = parseInt(parts[0], 10);
+        var minutes = parseInt(parts[1], 10);
+        if (!isNaN(hours) && !isNaN(minutes)) {
+            return hours * 60 + minutes;
+        }
+    }
+    return null;
+}
+
+function timeOverlap(start1, end1, start2, end2) {
+    return start1 < end2 && start2 < end1;
+}
+
+function minutesToHHMM(mins) {
+    mins = Math.max(0, Math.min(1439, mins | 0));
+    var h = Math.floor(mins / 60);
+    var m = mins % 60;
+    function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+    return pad2(h) + ':' + pad2(m);
+}
+
+// ---------------------------------------------------------------------------
+// NEW VALIDATION FUNCTIONS
+// ---------------------------------------------------------------------------
+
+function isClientSubscriptionValid(clientData, scheduleDate) {
+    if (!clientData || !clientData.fields || !scheduleDate) return true;
+
+    var effectiveFrom = safeGetValue(clientData.fields, 'Effective_From.value', '');
+    var effectiveTo = safeGetValue(clientData.fields, 'Effective_To.value', '');
+
+    // If no subscription dates are set, assume valid
+    if (!effectiveFrom && !effectiveTo) return true;
+
+    // Validate date format YYYY-MM-DD
+    var datePattern = /^\d{4}-\d{2}-\d{2}$/;
+    if (effectiveFrom && !datePattern.test(effectiveFrom)) return true;
+    if (effectiveTo && !datePattern.test(effectiveTo)) return true;
+
+    // Check if schedule date falls within subscription period
+    if (effectiveFrom && scheduleDate < effectiveFrom) return false;
+    if (effectiveTo && scheduleDate > effectiveTo) return false;
+
+    return true;
+}
+
+
+// Updated isClientOnLeave — now accepts clientId and clientName (to support matching by id OR name)
+function isClientOnLeave(clientId, scheduleDate, scheduleStartTime, scheduleEndTime, clientLeaves) {
+    if (!clientId || !scheduleDate) return false;
+
+    // Use pre-computed map
+    var clientApprovedLeaves = clientLeaveMap[clientId];
+    if (!clientApprovedLeaves || clientApprovedLeaves.length === 0) return false;
+
+    for (var i = 0; i < clientApprovedLeaves.length; i++) {
+        var leave = clientApprovedLeaves[i];
+        var leaveStartDate = safeGetValue(leave.fields, 'Start_Date.value', '');
+        var leaveEndDate = safeGetValue(leave.fields, 'End_Date.value', '');
+        var leaveStartTime = safeGetValue(leave.fields, 'Start_Time.value', '');
+        var leaveEndTime = safeGetValue(leave.fields, 'End_Time.value', '');
+
+        if (scheduleDate < leaveStartDate || scheduleDate > leaveEndDate) continue;
+
+        if (scheduleStartTime !== undefined && scheduleEndTime !== undefined &&
+            leaveStartTime && leaveEndTime) {
+            var leaveStartMin = parseTime(leaveStartTime);
+            var leaveEndMin = parseTime(leaveEndTime);
+
+            if (leaveStartMin !== null && leaveEndMin !== null) {
+                if (timeOverlap(scheduleStartTime, scheduleEndTime, leaveStartMin, leaveEndMin)) {
+                    return true;
+                }
+            } else {
+                return true;
+            }
+        } else {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// INPUT VALIDATION
+// ---------------------------------------------------------------------------
+
+function validateInputs() {
+    var errors = [];
+    if (!currDate || typeof currDate !== 'string') {
+        errors.push('currDate is required and must be a string');
+    }
+    if (currDate && !/^\d{4}-\d{2}-\d{2}$/.test(currDate)) {
+        errors.push('currDate must be in YYYY-MM-DD format');
+    }
+    if (!allClientsScheduleData || !isArray(allClientsScheduleData)) {
+        errors.push('allClientsScheduleData is required and must be an array');
+    }
+    return errors;
+}
+
+var validationErrors = validateInputs();
+if (validationErrors.length > 0) {
+    result.error = 'Input validation failed: ' + validationErrors.join(', ');
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// DATE UTILITIES
+// ---------------------------------------------------------------------------
+
+function getNext7Days(inputDate) {
+    var days = [];
+    function zero2(n) { return n < 10 ? ('0' + n) : ('' + n); }
+    var DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    var WEEK_START = 1;
+
+    if (typeof inputDate !== 'string' || inputDate.length !== 10 || inputDate.indexOf('-') === -1) {
+        result.debug.dateError = "currDate must be YYYY-MM-DD format";
+        return days;
+    }
+
+    var parts = inputDate.split('-');
+    if (parts.length !== 3) {
+        result.debug.dateError = "Invalid date format";
+        return days;
+    }
+
+    var y = parseInt(parts[0], 10);
+    var m = parseInt(parts[1], 10);
+    var d = parseInt(parts[2], 10);
+
+    if (isNaN(y) || isNaN(m) || isNaN(d) || y < 1900 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) {
+        result.debug.dateError = "Invalid date components";
+        return days;
+    }
+
+    result.debug.dateUsed = "parsed:YYYY-MM-DD";
+
+    function isLeap(yy) {
+        return (yy % 4 === 0 && yy % 100 !== 0) || (yy % 400 === 0);
+    }
+
+    function daysInMonth(yy, mm) {
+        var monthDays = [31, isLeap(yy) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        return monthDays[mm - 1];
+    }
+
+    function getDayOfWeek(yy, mm, dd) {
+        var t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+        if (mm < 3) yy -= 1;
+        return (yy + Math.floor(yy / 4) - Math.floor(yy / 100) + Math.floor(yy / 400) + t[mm - 1] + dd) % 7;
+    }
+
+    var currDow = getDayOfWeek(y, m, d);
+    var daysToWeekStart = (WEEK_START - currDow + 7) % 7;
+    if (daysToWeekStart === 0) daysToWeekStart = 7;
+
+    for (var i = 0; i < 7; i++) {
+        var yy = y;
+        var mm = m;
+        var dd = d + daysToWeekStart + i;
+
+        while (dd > daysInMonth(yy, mm)) {
+            dd -= daysInMonth(yy, mm);
+            mm += 1;
+            if (mm > 12) { mm = 1; yy += 1; }
+        }
+
+        var iso = yy + '-' + zero2(mm) + '-' + zero2(dd);
+        var dayName = DAY_NAMES[getDayOfWeek(yy, mm, dd)];
+
+        days.push({ date: iso, day: dayName, iso: iso });
+
+        if (i === 0) result.debug.nextWeekStartIso = iso;
+    }
+
+    result.debug.daysGenerated = days.length;
+    result.debug.next7DaysPreview = days.map(function (day) {
+        return day.iso + ' ' + day.day;
+    });
+
+    return days;
+}
+
+// ---------------------------------------------------------------------------
+// EMPLOYEE AND SETTINGS FUNCTIONS
+// ---------------------------------------------------------------------------
+
+function dayToKey(dayName) {
+    var d = normStr(dayName).toUpperCase();
+    var map = {
+        'SUNDAY': 'SUNDAY', 'MONDAY': 'MONDAY', 'TUESDAY': 'TUESDAY',
+        'WEDNESDAY': 'WEDNESDAY', 'THURSDAY': 'THURSDAY',
+        'FRIDAY': 'FRIDAY', 'SATURDAY': 'SATURDAY'
+    };
+    return map[d] || d;
+}
+
+function getShiftSegmentsForWindow(startMin, endMin) {
+    var segments = [];
+    function overlaps(a1, a2, b1, b2) { return a1 < b2 && b1 < a2; }
+    var bands = [
+        { seg: 'NOC', start: 0, end: 360 },
+        { seg: 'AM', start: 360, end: 720 },
+        { seg: 'PM', start: 720, end: 1260 },
+        { seg: 'NOC', start: 1260, end: 1440 }
+    ];
+    var seen = {};
+    for (var i = 0; i < bands.length; i++) {
+        var b = bands[i];
+        if (overlaps(startMin, endMin, b.start, b.end) && !seen[b.seg]) {
+            segments.push(b.seg);
+            seen[b.seg] = true;
+        }
+    }
+    return segments;
+}
+
+function isEligibleGhostCaregiver(caregiverName, employeesDetails) {
+    if (!caregiverName || !isArray(employeesDetails)) return false;
+    var caregiverNameNorm = normName(caregiverName);
+
+    for (var i = 0; i < employeesDetails.length; i++) {
+        var emp = employeesDetails[i];
+        if (!emp || !emp.fields) continue;
+
+        var isEmergencyAvailable = normStr(safeGetValue(emp.fields, 'LastMinute_Ready_Ghost_Pool_.value', '')).toLowerCase() === 'yes';
+        var empName = safeGetValue(emp.fields, 'Employee_Full_Name.value', '');
+
+        if (isEmergencyAvailable && normName(empName) === caregiverNameNorm) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function isCaregiverAvailableForSchedule(caregiverName, dayName, startMin, endMin, employeesDetails) {
+    if (!caregiverName || !dayName) return false;
+
+    // If employeesDetails is not provided, don't block scheduling on this gate
+    if (!isArray(employeesDetails) || employeesDetails.length === 0) {
+        return true;
+    }
+
+    var cgNorm = normName(caregiverName);
+    var dayKey = dayToKey(dayName);
+    var segments = getShiftSegmentsForWindow(startMin, endMin);
+
+    // Find employee record by Employee_Full_Name.value
+    var emp = null;
+    for (var i = 0; i < employeesDetails.length; i++) {
+        var e = employeesDetails[i];
+        var nm = safeGetValue(e, 'fields.Employee_Full_Name.value', '');
+        if (nm && normName(nm) === cgNorm) {
+            emp = e;
+            break;
+        }
+    }
+    if (!emp || !emp.fields) return false;
+
+    // All overlapped segments must be affirmative
+    for (var s = 0; s < segments.length; s++) {
+        var seg = segments[s]; // 'AM' | 'PM' | 'NOC'
+        var key = dayKey + '_' + seg; // e.g., MONDAY_AM
+        var raw = safeGetValue(emp.fields, key + '.value', '');
+        var val = normStr(String(raw)).toLowerCase();
+        if (!(val === 'yes' || val === 'true')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function isCaregiverAvailableForCustomTime(caregiverName, dayName, startMin, endMin, caregiverAvailability) {
+    if (!caregiverName || !dayName) return false;
+
+    // If caregiverAvailability is not provided, don't block scheduling
+    if (!caregiverAvailability || !caregiverAvailability.data || !isArray(caregiverAvailability.data)) {
+        return true;
+    }
+
+    var cgNorm = normName(caregiverName);
+
+    // Find the caregiver's employee ID first
+    var caregiverEmployeeId = getCaregiverEmployeeId(caregiverName, employeesDetails);
+    if (!caregiverEmployeeId) {
+        return false; // Cannot find caregiver, assume not available
+    }
+
+    // Get caregiver's custom time schedules for the specific day
+    var caregiverSchedules = [];
+    var schedulesList = caregiverAvailability.data || [];
+
+    for (var i = 0; i < schedulesList.length; i++) {
+        var scheduleItem = schedulesList[i];
+        if (!scheduleItem || !scheduleItem.fields) continue;
+
+        // Use refId to match caregiver (same pattern as clientSchedules)
+        if (scheduleItem.refId !== caregiverEmployeeId) continue;
+
+        var scheduleDayName = normStr(safeGetValue(scheduleItem.fields, 'Day.value', '')).toUpperCase();
+        var requestedDayName = normStr(dayName).toUpperCase();
+
+        if (scheduleDayName !== requestedDayName) continue;
+
+        var startTimeStr = normStr(safeGetValue(scheduleItem.fields, 'Schedule_Start_Time.value', ''));
+        var endTimeStr = normStr(safeGetValue(scheduleItem.fields, 'Schedule_End_Time.value', ''));
+
+        var availableStartTime = parseTime(startTimeStr);
+        var availableEndTime = parseTime(endTimeStr);
+
+        if (availableStartTime === null || availableEndTime === null) continue;
+        if (availableStartTime >= availableEndTime) continue;
+
+        caregiverSchedules.push({
+            startTime: availableStartTime,
+            endTime: availableEndTime
+        });
+    }
+
+    // If no custom schedules found for this day, caregiver is not available
+    if (caregiverSchedules.length === 0) {
+        return false;
+    }
+
+    // Check if the requested time window overlaps with any available time slots
+    for (var j = 0; j < caregiverSchedules.length; j++) {
+        var schedule = caregiverSchedules[j];
+
+        // Check if requested time falls within available time window
+        if (startMin >= schedule.startTime && endMin <= schedule.endTime) {
+            return true;
+        }
+    }
+
+    return false; // No matching time window found
+}
+
+function checkCaregiverAvailabilityByType(caregiverName, dayName, startMin, endMin, employeesDetails, caregiverAvailability) {
+    if (!caregiverName || !dayName) return false;
+
+    // Get caregiver's availability type
+    var empRecord = getEmployeeRecordByName(caregiverName, employeesDetails);
+    if (!empRecord || !empRecord.fields) {
+        return false;
+    }
+
+    var availabilityType = normStr(safeGetValue(empRecord.fields, 'Availability_Type.value', '')).toLowerCase();
+
+    // NEW: If no availability type is set, check if caregiver has custom schedules
+    if (!availabilityType) {
+        var caregiverEmployeeId = getCaregiverEmployeeId(caregiverName, employeesDetails);
+        if (caregiverAvailability && caregiverAvailability.data) {
+            var hasCustomSchedules = caregiverAvailability.data.some(function (item) {
+                return item.refId === caregiverEmployeeId;
+            });
+
+            if (hasCustomSchedules) {
+                availabilityType = 'custom time';
+            }
+        }
+    }
+
+    // Check availability based on type
+    if (availabilityType === 'custom time') {
+        return isCaregiverAvailableForCustomTime(caregiverName, dayName, startMin, endMin, caregiverAvailability);
+    } else {
+        // Default to AM/PM/NOC availability check for any other type (including "AM, PM, NOC")
+        return isCaregiverAvailableForSchedule(caregiverName, dayName, startMin, endMin, employeesDetails);
+    }
+}
+
+function isCaregiverAvailable(caregiverName, targetClientId, targetDate, targetStartTime, targetEndTime) {
+    if (isGhostCaregiverForDate(caregiverName, targetDate, targetStartTime, targetEndTime, ghostShifts || [])) return false;
+
+    // FIX: Check if caregiver is eligible for ghost shifts and exclude them from regular schedules
+    // if (isEligibleGhostCaregiver(caregiverName, employeesDetails)) return false;
+    if (!caregiverName || !targetDate) return true;
+
+    if (globalCaregiverTimeSlots[caregiverName]) {
+        var assignments = globalCaregiverTimeSlots[caregiverName];
+
+        for (var i = 0; i < assignments.length; i++) {
+            var assignment = assignments[i];
+            // if (assignment.clientId === targetClientId) continue;
+
+            if (assignment.date === targetDate) {
+                if (timeOverlap(targetStartTime, targetEndTime, assignment.startTime, assignment.endTime)) {
+                    // result.debug = result.debug || {};
+                    // result.debug.conflictDetections = result.debug.conflictDetections || [];
+                    // result.debug.conflictDetections.push({
+                    // caregiverName: caregiverName,
+                    // targetClientId: targetClientId,
+                    // targetDate: targetDate,
+                    // targetTime: targetStartTime + '-' + targetEndTime,
+                    // conflictClientId: assignment.clientId,
+                    // conflictTime: assignment.startTime + '-' + assignment.endTime,
+                    // reason: 'time_overlap'
+                    // });
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+function getEmployeeRecordByName(caregiverName, employeesDetails) {
+    if (!caregiverName) return null;
+    return employeeNameMap[normName(caregiverName)] || null;
+}
+
+function getCaregiverQBID(caregiverName, employeesDetails) {
+    var emp = getEmployeeRecordByName(caregiverName, employeesDetails);
+    if (!emp || !emp.fields) {
+        result.debug = result.debug || {};
+        result.debug.qbIdLookupFailed = result.debug.qbIdLookupFailed || [];
+        result.debug.qbIdLookupFailed.push({
+            searchedName: caregiverName,
+            normalizedName: normName(caregiverName),
+            availableEmployees: employeesDetails.map(function (e) {
+                return {
+                    name: safeGetValue(e, 'fields.Employee_Full_Name.value', ''),
+                    normalized: normName(safeGetValue(e, 'fields.Employee_Full_Name.value', ''))
+                };
+            })
+        });
+        return '';
+    }
+
+    var candidates = [
+        'QB_Id.value', 'QB_ID.value', 'QB ID.value', 'QBID.value',
+        'QuickBooks_Id.value', 'QuickBooks_ID.value', 'QuickBooks ID.value'
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+        var v = safeGetValue(emp.fields, candidates[i], '');
+        if (v) return String(v);
+    }
+    var fallback = safeGetValue(emp.fields, 'QB_Id', '');
+    return fallback ? String(fallback) : '';
+}
+
+function getCaregiverEmployeeId(caregiverName, employeesDetails) {
+    var emp = getEmployeeRecordByName(caregiverName, employeesDetails);
+    return (emp && emp.id) ? String(emp.id) : '';
+}
+
+function getAllCaregiverNames(employeesDetails) {
+    var names = [];
+    if (!isArray(employeesDetails)) return names;
+    for (var i = 0; i < employeesDetails.length; i++) {
+        var emp = employeesDetails[i];
+        var name = safeGetValue(emp, 'fields.Employee_Full_Name.value', '');
+        if (name) names.push(normStr(name));
+    }
+    return names;
+}
+
+function getScoringWeights() {
+    var weights = { workHours: 40, language: 25, skills: 20, historical: 15 };
+
+    if (isArray(settingsrecords) && settingsrecords.length > 0 && settingsrecords[0].fields) {
+        var fields = settingsrecords[0].fields;
+        weights.workHours = safeParseNumber(safeGetValue(fields, 'Worked_Hours_.value', weights.workHours), weights.workHours);
+        weights.language = safeParseNumber(safeGetValue(fields, 'Language_.value', weights.language), weights.language);
+        weights.skills = safeParseNumber(safeGetValue(fields, 'Skills_.value', weights.skills), weights.skills);
+        weights.historical = safeParseNumber(safeGetValue(fields, 'Client_History_.value', weights.historical), weights.historical);
+    }
+
+    result.debug.scoringWeights = weights;
+    return weights;
+}
+
+var scoringWeights = getScoringWeights();
+
+var HISTORICAL_LOOKBACK_DAYS = safeParseNumber(
+    safeGetValue((settingsrecords[0] && settingsrecords[0].fields) || {}, 'Historical_Lookback_Days.value', 30), 30
+);
+
+// ---------------------------------------------------------------------------
+// LEAVE AND CONFLICT CHECKING
+// ---------------------------------------------------------------------------
+
+function isCaregiverOnLeave(caregiverName, isoDate, leavesData, scheduleStartTime, scheduleEndTime) {
+    if (!caregiverName || !isoDate || !isArray(leavesData)) return false;
+
+    var caregiverNameNorm = normName(caregiverName);
+
+    for (var i = 0; i < leavesData.length; i++) {
+        var leave = leavesData[i];
+        if (!leave || !leave.fields) continue;
+
+        var fields = leave.fields;
+        var leaveCaregiver = safeGetValue(fields, 'Caregiver.value', '');
+        var leaveStatus = safeGetValue(fields, 'Leave_Status.value', '');
+        var leaveStartDate = safeGetValue(fields, 'Start_Date.value', '');
+        var leaveEndDate = safeGetValue(fields, 'End_Date.value', '');
+        var leaveStartTime = safeGetValue(fields, 'Start_Time.value', '');
+        var leaveEndTime = safeGetValue(fields, 'End_Time.value', '');
+
+        if (!leaveCaregiver || !leaveStartDate || !leaveEndDate || leaveStatus !== "Approved") continue;
+        if (normName(leaveCaregiver) !== caregiverNameNorm) continue;
+        if (isoDate < leaveStartDate || isoDate > leaveEndDate) continue;
+
+        // Only block if both leave and schedule have times and they overlap
+        if (
+            scheduleStartTime !== undefined && scheduleEndTime !== undefined &&
+            leaveStartTime && leaveEndTime
+        ) {
+            var leaveStartMin = parseTime(leaveStartTime);
+            var leaveEndMin = parseTime(leaveEndTime);
+            if (leaveStartMin !== null && leaveEndMin !== null) {
+                if (timeOverlap(scheduleStartTime, scheduleEndTime, leaveStartMin, leaveEndMin)) {
+                    return true;
+                } else {
+                    continue; // No overlap, do not block
+                }
+            }
+        }
+        // If either leave or schedule does not have times, treat as full-day leave
+        return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// PRIORITY SETTINGS
+// ---------------------------------------------------------------------------
+
+function getPrioritySettings(settingsTableData) {
+    var result = { order: [], active: {}, mandatory: {} };
+
+    if (!settingsTableData || !settingsTableData.data || !isArray(settingsTableData.data)) return result;
+
+    var seen = {};
+
+    for (var i = 0; i < settingsTableData.data.length; i++) {
+        var row = settingsTableData.data[i];
+        if (!row || !row.fields) continue;
+
+        var fields = row.fields;
+        var description = safeGetValue(fields, 'Description.value', '');
+        var isMandatory = safeGetValue(fields, 'Is_Mandatory_.value', '');
+        var status = safeGetValue(fields, 'Status.value', '');
+
+        var normalizedName = normStr(description);
+        if (!normalizedName || seen[normalizedName]) continue;
+        seen[normalizedName] = true;
+
+        result.order.push(normalizedName);
+        result.active[normalizedName] = normStr(status).toLowerCase() === 'active';
+        result.mandatory[normalizedName] = normStr(isMandatory).toLowerCase() === 'yes';
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// CLIENT PREFERENCE FUNCTIONS
+// ---------------------------------------------------------------------------
+
+function extractClientPrefs(clientData) {
+    if (!clientData || !clientData.fields) return {};
+    var fields = clientData.fields;
+    return {
+        genderPref: normStr(safeGetValue(fields, 'Gender_Preference.value', '')),
+        genderPrefNorm: normStr(safeGetValue(fields, 'Gender_Preference.value', '')).toLowerCase(),
+        physReq: safeParseNumber(safeGetValue(fields, 'Physical_Capability_lbs.value', 0), 0),
+        langs: normalizeSkillList(safeGetValue(fields, 'Language_Preferences.value', '')),
+        skills: normalizeSkillList(safeGetValue(fields, 'Skills_Preferences.value', '')),
+        personality: parseList(safeGetValue(fields, 'Personality_Match.value', '')),
+        blockList: parseList(safeGetValue(fields, 'Caregiver_Block_List.value', ''))
+    };
+}
+
+function normalizeSkillList(val) {
+    if (isArray(val)) {
+        return val.map(function (x) { return normStr(x).toLowerCase(); }).filter(Boolean);
+    }
+    return parseList(val);
+}
+
+function getCaregiverProfile(emp) {
+    if (!emp || !emp.fields) return null;
+    var ef = emp.fields;
+    return {
+        name: normStr(safeGetValue(ef, 'Employee_Full_Name.value', '')),
+        nameNorm: normName(safeGetValue(ef, 'Employee_Full_Name.value', '')),
+        gender: normStr(safeGetValue(ef, 'Gender.value', '')),
+        genderNorm: normStr(safeGetValue(ef, 'Gender.value', '')).toLowerCase(),
+        phys: safeParseNumber(safeGetValue(ef, 'Physical_Capability_lbs.value', 0), 0),
+        skills: normalizeSkillList(safeGetValue(ef, 'Skill_Type.value', '')),
+        personality: parseList(safeGetValue(ef, 'Personality_Match.value', '')),
+        langs: normalizeSkillList(safeGetValue(ef, 'Language.value', ''))
+    };
+}
+
+function isBlockedByClient(prefs, caregiverName) {
+    if (!prefs || !prefs.blockList || prefs.blockList.length === 0) return false;
+    var nm = normName(caregiverName);
+    for (var i = 0; i < prefs.blockList.length; i++) {
+        if (prefs.blockList[i] === nm) return true;
+    }
+    return false;
+}
+
+function scoreOptional(prefs, profile) {
+    if (!prefs || !profile) return 0;
+    var score = 0;
+
+    if (profile.langs.indexOf('english') !== -1) score += 5;
+
+    if (prefs.langs.length) {
+        for (var i = 0; i < profile.langs.length; i++) {
+            if (prefs.langs.indexOf(profile.langs[i]) !== -1) score += 2;
+        }
+    }
+
+    if (prefs.skills.length) {
+        for (var j = 0; j < profile.skills.length; j++) {
+            if (prefs.skills.indexOf(profile.skills[j]) !== -1) score += 1;
+        }
+    }
+
+    if (prefs.personality.length) {
+        for (var k = 0; k < profile.personality.length; k++) {
+            if (prefs.personality.indexOf(profile.personality[k]) !== -1) score += 1;
+        }
+    }
+    return score;
+}
+
+// ---------------------------------------------------------------------------
+// HISTORICAL AND SCORING FUNCTIONS
+// ---------------------------------------------------------------------------
+
+function getHistoricalCount(caregiverName, clientName, actualSchedulingData, lookbackDays) {
+    if (!caregiverName || !clientName || !isArray(actualSchedulingData)) return 0;
+
+    // Cache key
+    var cacheKey = normName(caregiverName) + '|' + normName(clientName) + '|' + lookbackDays;
+    if (historicalCountCache[cacheKey] !== undefined) {
+        return historicalCountCache[cacheKey];
+    }
+
+    var now = currDate;
+    if (!now) return 0;
+
+    var cutoff;
+    (function calcCutoff() {
+        var p = now.split('-');
+        var y = +p[0], m = +p[1], d = +p[2];
+        d -= lookbackDays;
+        while (d < 1) {
+            m -= 1;
+            if (m < 1) { m = 12; y -= 1; }
+            var dim = new Date(y, m, 0).getDate();
+            d += dim;
+        }
+        function z(n) { return n < 10 ? '0' + n : '' + n; }
+        cutoff = y + '-' + z(m) + '-' + z(d);
+    })();
+
+    var cgNorm = normName(caregiverName);
+    var clientNorm = normName(clientName);
+    var count = 0;
+    for (var i = 0; i < actualSchedulingData.length; i++) {
+        var rec = actualSchedulingData[i];
+        if (!rec || !rec.fields) continue;
+        var f = rec.fields;
+        if (normName(safeGetValue(f, 'Actual_Caregiver.value', '')) !== cgNorm) continue;
+        if (normName(safeGetValue(f, 'Client_Name.value', '')) !== clientNorm) continue;
+        var status = safeGetValue(f, 'Scheduling_Status.value', '');
+        if (status !== 'Approved' && status !== 'Completed' && status !== 'Scheduled Completed') continue;
+        var sDate = safeGetValue(f, 'Schedule_Start_Date.value', '');
+        if (!sDate) continue;
+        if (sDate >= cutoff && sDate <= currDate) count++;
+    }
+
+    // Store in cache
+    historicalCountCache[cacheKey] = count;
+    return count;
+}
+function calculateTotalScore(debugReasons) {
+    var total = 0;
+    if (!debugReasons || !isArray(debugReasons)) return total;
+
+    for (var i = 0; i < debugReasons.length; i++) {
+        var reason = debugReasons[i];
+        if (reason && typeof reason.scoreAdjustment === 'number') {
+            total += reason.scoreAdjustment;
+        }
+    }
+    return total;
+}
+// ---------------------------------------------------------------------------
+// WEEKLY HOURS DISTRIBUTION
+// ---------------------------------------------------------------------------
+
+var globalAssignedCaregivers = typeof globalAssignedCaregivers !== 'undefined' ? globalAssignedCaregivers : {};
+var globalCaregiverHours = typeof globalCaregiverHours !== 'undefined' ? globalCaregiverHours : {};
+var allClientSchedules = typeof allClientSchedules !== 'undefined' ? allClientSchedules : {};
+// MINIMAL FIX: Replace lines 549-573 in weeklyDistributionCheck function
+
+function weeklyDistributionCheck(employeeData, candidateShiftHours, settingsSnapshot, debugFlag) {
+    var result = { allowed: true, wouldExceedMax: false, projectedHours: 0, scoreAdjustment: 0 };
+
+    if (debugFlag) result.reason = '';
+    if (!employeeData || !employeeData.fields) {
+        if (debugFlag) result.reason = 'Employee data not available';
+        return result;
+    }
+
+    var empFields = employeeData.fields;
+    candidateShiftHours = safeParseNumber(candidateShiftHours, 0);
+
+    var targetWeeklyHours = safeParseNumber(safeGetValue(empFields, 'Target_Weekly_Hours.value', 0), 0);
+    var maxWeeklyHours = safeParseNumber(safeGetValue(empFields, 'Max_Weekly_Hours.value', 0), 0);
+
+    var employeeName = safeGetValue(empFields, 'Employee_Full_Name.value', '');
+    var employeeNameNorm = normName(employeeName);
+
+    // FIX: Use globalCaregiverHours directly instead of recalculating from globalAssignedCaregivers
+    var currentWeeklyHours = globalCaregiverHours[employeeNameNorm] || 0;
+
+    result.projectedHours = currentWeeklyHours + candidateShiftHours;
+    result.projectedHours = Math.round(result.projectedHours * 100) / 100; // round to 2 decimals
+
+    if (maxWeeklyHours > 0 && result.projectedHours > maxWeeklyHours) {
+        result.allowed = false;
+        result.wouldExceedMax = true;
+        if (debugFlag) {
+            result.reason = 'projectedHours (' + result.projectedHours + ') > Max_Weekly_Hours (' + maxWeeklyHours + ')';
+        }
+        return result;
+    }
+
+    if (targetWeeklyHours > 0 && currentWeeklyHours < targetWeeklyHours) {
+        var hoursBelow = targetWeeklyHours - currentWeeklyHours;
+        result.scoreAdjustment = Math.min(hoursBelow * 2, 30);
+    }
+
+    if (debugFlag && !result.reason) {
+        result.reason = 'Weekly hours check passed. Current: ' + currentWeeklyHours +
+            ', Candidate: ' + candidateShiftHours + ', Projected: ' + result.projectedHours +
+            ', Target: ' + targetWeeklyHours + ', Max: ' + maxWeeklyHours +
+            ', ScoreBoost: ' + result.scoreAdjustment;
+    }
+
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// PRIORITY EVALUATION FUNCTIONS
+// ---------------------------------------------------------------------------
+
+function getLastWeekCaregiver(clientData, actualSchedulingData) {
+    if (!clientData || !isArray(actualSchedulingData)) return null;
+
+    var clientName = safeGetValue(clientData, 'fields.Client_Full_Name.value', '');
+    var clientNameNorm = normName(clientName);
+
+    function parseISODate(dateStr) {
+        if (!dateStr || typeof dateStr !== 'string') return null;
+        var parts = dateStr.split('-');
+        if (parts.length !== 3) return null;
+        var y = parseInt(parts[0], 10);
+        var m = parseInt(parts[1], 10);
+        var d = parseInt(parts[2], 10);
+        if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
+        return { year: y, month: m, day: d };
+    }
+
+    function dateToISO(dateObj) {
+        function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+        return dateObj.year + '-' + pad2(dateObj.month) + '-' + pad2(dateObj.day);
+    }
+
+    function addDays(dateObj, days) {
+        var result = { year: dateObj.year, month: dateObj.month, day: dateObj.day + days };
+
+        function isLeap(year) {
+            return (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+        }
+
+        function daysInMonth(year, month) {
+            var monthDays = [31, isLeap(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+            return monthDays[month - 1];
+        }
+
+        while (result.day <= 0) {
+            result.month--;
+            if (result.month <= 0) { result.month = 12; result.year--; }
+            result.day += daysInMonth(result.year, result.month);
+        }
+
+        while (result.day > daysInMonth(result.year, result.month)) {
+            result.day -= daysInMonth(result.year, result.month);
+            result.month++;
+            if (result.month > 12) { result.month = 1; result.year++; }
+        }
+
+        return result;
+    }
+
+    var todayObj = parseISODate(currDate);
+    if (!todayObj) return null;
+
+    var lastWeekStart = addDays(todayObj, -7);  // 7 days ago  
+    var lastWeekEnd = addDays(todayObj, -1);    // 1 day ago
+    var lastWeekStartISO = dateToISO(lastWeekStart);
+    var lastWeekEndISO = dateToISO(lastWeekEnd);
+
+    result.debug = result.debug || {};
+    result.debug.lastWeekDateCalculation = {
+        currDate: currDate,
+        lastWeekStartISO: lastWeekStartISO,
+        lastWeekEndISO: lastWeekEndISO
+    };
+
+    // NEW: Track caregivers and their total hours
+    var caregiverHours = {};
+    var caregiverLastDate = {};
+
+    for (var i = 0; i < actualSchedulingData.length; i++) {
+        var record = actualSchedulingData[i];
+        if (!record || !record.fields) continue;
+
+        var fields = record.fields;
+        var recordClientName = safeGetValue(fields, 'Client_Name.value', '');
+        var status = safeGetValue(fields, 'Scheduling_Status.value', '');
+        var caregiverName = safeGetValue(fields, 'Actual_Caregiver.value', '');
+        var scheduleDate = safeGetValue(fields, 'Schedule_Start_Date.value', '');
+
+        // NEW: Get Expected_Hours instead of Actual_Hours
+        var expectedHours = safeParseNumber(safeGetValue(fields, 'Expected_Hours.value', 0), 0);
+
+        if ((status === 'Completed' || status === 'Scheduled Completed') &&
+            normName(recordClientName) === clientNameNorm &&
+            caregiverName && scheduleDate >= lastWeekStartISO && scheduleDate <= lastWeekEndISO) {
+
+            // Initialize caregiver tracking
+            if (!caregiverHours[caregiverName]) {
+                caregiverHours[caregiverName] = 0;
+                caregiverLastDate[caregiverName] = scheduleDate;
+            }
+
+            // Add hours to caregiver's total
+            caregiverHours[caregiverName] += expectedHours;
+
+            // Keep track of most recent date for this caregiver
+            if (scheduleDate > caregiverLastDate[caregiverName]) {
+                caregiverLastDate[caregiverName] = scheduleDate;
+            }
+        }
+    }
+
+    // Find caregiver with maximum hours
+    var maxHoursCaregiver = null;
+    var maxHours = 0;
+    var maxHoursLastDate = '';
+
+    for (var caregiver in caregiverHours) {
+        var hours = caregiverHours[caregiver];
+        var lastDate = caregiverLastDate[caregiver];
+
+        // Primary sort: by hours (higher wins)
+        // Secondary sort: by most recent date (if hours are tied)
+        if (hours > maxHours ||
+            (hours === maxHours && lastDate > maxHoursLastDate)) {
+            maxHours = hours;
+            maxHoursCaregiver = caregiver;
+            maxHoursLastDate = lastDate;
+        }
+    }
+
+    // Add debug information
+    result.debug.lastWeekCaregiverSelection = {
+        clientName: clientName,
+        caregiverHours: caregiverHours,
+        selectedCaregiver: maxHoursCaregiver,
+        maxHours: maxHours,
+        selectionReason: maxHoursCaregiver ?
+            'Selected caregiver with most Expected_Hours (' + maxHours + ')' :
+            'No caregivers found for last week'
+    };
+
+    return maxHoursCaregiver;
+}
+
+function getLastWeekCompleteSchedule(clientData, actualSchedulingData, targetWeekDays) {
+    if (!clientData || !isArray(actualSchedulingData) || !isArray(targetWeekDays)) return null;
+
+    var clientName = safeGetValue(clientData, 'fields.Client_Full_Name.value', '');
+    var clientNameNorm = normName(clientName);
+
+    function parseISODate(dateStr) {
+        if (!dateStr || typeof dateStr !== 'string') return null;
+        var parts = dateStr.split('-');
+        if (parts.length !== 3) return null;
+        var y = parseInt(parts[0], 10);
+        var m = parseInt(parts[1], 10);
+        var d = parseInt(parts[2], 10);
+        if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
+        return { year: y, month: m, day: d };
+    }
+
+    function dateToISO(dateObj) {
+        function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+        return dateObj.year + '-' + pad2(dateObj.month) + '-' + pad2(dateObj.day);
+    }
+
+    function addDays(dateObj, days) {
+        var result = { year: dateObj.year, month: dateObj.month, day: dateObj.day + days };
+
+        function isLeap(year) {
+            return (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+        }
+
+        function daysInMonth(year, month) {
+            var monthDays = [31, isLeap(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+            return monthDays[month - 1];
+        }
+
+        while (result.day <= 0) {
+            result.month--;
+            if (result.month <= 0) { result.month = 12; result.year--; }
+            result.day += daysInMonth(result.year, result.month);
+        }
+
+        while (result.day > daysInMonth(result.year, result.month)) {
+            result.day -= daysInMonth(result.year, result.month);
+            result.month++;
+            if (result.month > 12) { result.month = 1; result.year++; }
+        }
+
+        return result;
+    }
+
+    function getDayOfWeek(yy, mm, dd) {
+        var t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+        if (mm < 3) yy -= 1;
+        return (yy + Math.floor(yy / 4) - Math.floor(yy / 100) + Math.floor(yy / 400) + t[mm - 1] + dd) % 7;
+    }
+
+    // Calculate last week dates based on target week
+    var lastWeekSchedule = {};
+    var DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+    for (var i = 0; i < targetWeekDays.length; i++) {
+        var targetDay = targetWeekDays[i];
+        var targetDateObj = parseISODate(targetDay.iso);
+        if (!targetDateObj) continue;
+
+        // Get corresponding last week date
+        var lastWeekDateObj = addDays(targetDateObj, -7);
+        var lastWeekISO = dateToISO(lastWeekDateObj);
+
+        lastWeekSchedule[targetDay.day] = {
+            targetDate: targetDay.iso,
+            lastWeekDate: lastWeekISO,
+            assignments: []
+        };
+    }
+
+    // Find all last week assignments
+    for (var j = 0; j < actualSchedulingData.length; j++) {
+        var record = actualSchedulingData[j];
+        if (!record || !record.fields) continue;
+
+        var fields = record.fields;
+        var recordClientName = safeGetValue(fields, 'Client_Name.value', '');
+        var status = safeGetValue(fields, 'Scheduling_Status.value', '');
+        var caregiverName = safeGetValue(fields, 'Actual_Caregiver.value', '');
+        var scheduleDate = safeGetValue(fields, 'Schedule_Start_Date.value', '');
+        var startTime = safeGetValue(fields, 'Schedule_Start_Time.value', '');
+        var endTime = safeGetValue(fields, 'Schedule_End_Time.value', '');
+
+        if ((status === 'Completed' || status === 'Scheduled Completed' || status === 'Approved') &&
+            normName(recordClientName) === clientNameNorm &&
+            caregiverName && scheduleDate && startTime && endTime) {
+
+            // Find which day this belongs to
+            for (var dayKey in lastWeekSchedule) {
+                if (lastWeekSchedule[dayKey].lastWeekDate === scheduleDate) {
+                    lastWeekSchedule[dayKey].assignments.push({
+                        caregiverName: caregiverName,
+                        startTime: startTime,
+                        endTime: endTime,
+                        startTimeMinutes: parseTime(startTime),
+                        endTimeMinutes: parseTime(endTime)
+                    });
+                    break;
+                }
+            }
+        }
+    }
+
+    // Add debug info
+    result.debug = result.debug || {};
+    result.debug.lastWeekCompleteSchedule = {
+        clientName: clientName,
+        lastWeekSchedule: lastWeekSchedule,
+        foundAssignments: Object.keys(lastWeekSchedule).reduce(function (total, day) {
+            return total + lastWeekSchedule[day].assignments.length;
+        }, 0)
+    };
+
+    return lastWeekSchedule;
+}
+
+
+function calculateClientSpecificHours(caregiverName, clientData, actualSchedulingData) {
+    if (!caregiverName || !clientData || !isArray(actualSchedulingData)) return 0;
+
+    var clientName = safeGetValue(clientData, 'fields.Client_Full_Name.value', '');
+    var clientNameNorm = normName(clientName);
+    var caregiverNameNorm = normName(caregiverName);
+    var totalHours = 0;
+
+    for (var i = 0; i < actualSchedulingData.length; i++) {
+        var record = actualSchedulingData[i];
+        if (!record || !record.fields) continue;
+
+        var fields = record.fields;
+        var recordClientName = safeGetValue(fields, 'Client_Name.value', '');
+        var recordCaregiverName = safeGetValue(fields, 'Actual_Caregiver.value', '');
+        var status = safeGetValue(fields, 'Scheduling_Status.value', '');
+        var hours = safeParseNumber(safeGetValue(fields, 'Actual_Hours.value', 0), 0);
+
+        if ((status === 'Completed' || status === 'Approved' || status === 'Scheduled Completed') &&
+            normName(recordClientName) === clientNameNorm &&
+            normName(recordCaregiverName) === caregiverNameNorm) {
+            totalHours += hours;
+        }
+    }
+    return totalHours;
+}
+
+function isFacilityClient(clientData) {
+    if (!clientData || !clientData.fields) return false;
+    var clientType = safeGetValue(clientData.fields, 'Client_Type.value', '');
+    var facilityName = safeGetValue(clientData.fields, 'Facility_Name.value', '');
+    return normStr(clientType).toLowerCase() === 'facility' || normStr(facilityName) !== '';
+}
+
+function checkGenderPreference(caregiverName, clientData, employeesDetails, isMandatory) {
+    var clientFields = clientData.fields || {};
+    var genderPrefRaw = safeGetValue(clientFields, 'Gender_Preference.value', '');
+    var genderPrefNorm = normStr(genderPrefRaw).toLowerCase();
+    var isStrict = normStr(safeGetValue(clientFields, 'Gender_Preference_Strict.value', '')).toLowerCase() === 'yes';
+
+    // If no preference or preference is "Either" -> always passes
+    if (!genderPrefNorm || genderPrefNorm === 'either') {
+        return {
+            passes: true,
+            reason: genderPrefNorm === 'either' ? 'gender_pref_either_any_gender' : 'no_gender_preference',
+            scoreBoost: 0
+        };
+    }
+
+    var empRecord = getEmployeeRecordByName(caregiverName, employeesDetails);
+    if (!empRecord || !empRecord.fields) {
+        return { passes: false, reason: 'employee_not_found', scoreBoost: 0 };
+    }
+
+    var caregiverGender = normStr(safeGetValue(empRecord.fields, 'Gender.value', '')).toLowerCase();
+    var genderMatch = caregiverGender === genderPrefNorm;
+
+    // Only enforce (block) if strict AND preference is a specific gender
+    var shouldBlock = isStrict;
+
+    return {
+        passes: shouldBlock ? genderMatch : true,
+        reason: genderMatch ? 'gender_match' : 'gender_mismatch',
+        scoreBoost: genderMatch ? 5 : 0
+    };
+}
+function checkLanguagePreference(caregiverName, clientData, employeesDetails, isMandatory) {
+    var clientFields = clientData.fields || {};
+    var requiredLangs = parseList(safeGetValue(clientFields, 'Language_Preferences.value', ''));
+
+    if (requiredLangs.length === 0) return { passes: true, reason: 'no_language_preference', scoreBoost: 0, matchCount: 0, totalRequired: 0 };
+
+    var empRecord = getEmployeeRecordByName(caregiverName, employeesDetails);
+    if (!empRecord || !empRecord.fields) {
+        return { passes: false, reason: 'employee_not_found', scoreBoost: 0, matchCount: 0, totalRequired: requiredLangs.length };
+    }
+
+    var caregiverLangs = parseList(safeGetValue(empRecord.fields, 'Language.value', ''));
+    var matchCount = 0;
+    var hasEnglish = caregiverLangs.indexOf('english') !== -1;
+
+    for (var i = 0; i < requiredLangs.length; i++) {
+        if (caregiverLangs.indexOf(requiredLangs[i]) !== -1) matchCount++;
+    }
+
+    var allMatch = matchCount === requiredLangs.length;
+    var scoreBoost = hasEnglish ? 5 : 0;
+    scoreBoost += matchCount * 2;
+
+    return {
+        passes: isMandatory ? allMatch : true,
+        reason: allMatch ? 'all_languages_match' : 'partial_language_match',
+        scoreBoost: scoreBoost,
+        matchCount: matchCount,
+        totalRequired: requiredLangs.length
+    };
+}
+
+function checkPhysicalCapability(caregiverName, clientData, employeesDetails, isMandatory) {
+    var clientFields = clientData.fields || {};
+    var clientWeightClass = normStr(safeGetValue(clientFields, 'Weight_Class.value', '')).toLowerCase();
+    var clientLbs = safeParseNumber(safeGetValue(clientFields, 'Physical_Capability_lbs.value', 0), 0);
+
+    if (!clientWeightClass && !clientLbs) {
+        return { passes: true, reason: 'no_weight_class_requirement', scoreBoost: 0 };
+    }
+
+    var empRecord = getEmployeeRecordByName(caregiverName, employeesDetails);
+    if (!empRecord || !empRecord.fields) {
+        return { passes: false, reason: 'employee_not_found', scoreBoost: 0 };
+    }
+
+    var caregiverWeightClass = normStr(safeGetValue(empRecord.fields, 'Weight_Class.value', '')).toLowerCase();
+    var caregiverLbs = safeParseNumber(safeGetValue(empRecord.fields, 'Physical_Capability_lbs.value', 0), 0);
+
+    var weightClassMatch = false;
+    if (clientWeightClass === "standard") {
+        weightClassMatch = (caregiverWeightClass === "standard" || caregiverWeightClass === "heavy");
+    } else if (clientWeightClass === "heavy") {
+        weightClassMatch = (caregiverWeightClass === "heavy");
+    }
+
+    // ENHANCED: Enforce lbs requirement when client specifies it
+    var lbsMatch = true;
+    if (clientLbs > 0) {
+        lbsMatch = caregiverLbs >= clientLbs;
+    }
+
+    // FIXED: When client has lbs requirement, enforce it regardless of mandatory setting
+    var passes;
+    if (clientLbs > 0) {
+        // If client specifies lbs, caregiver must meet or exceed it
+        passes = lbsMatch && (clientWeightClass ? weightClassMatch : true);
+    } else {
+        // If only weight class, use mandatory flag
+        passes = isMandatory ? (weightClassMatch && lbsMatch) : true;
+    }
+
+    // FIXED: Only add debug logging when caregiver actually fails the check
+    if (!passes) {
+        if (!result.debug) { result.debug = {}; }
+        if (!result.debug.physicalCapabilityRejects) { result.debug.physicalCapabilityRejects = []; }
+        result.debug.physicalCapabilityRejects.push({
+            caregiverName: caregiverName,
+            caregiverWeightClass: caregiverWeightClass,
+            caregiverLbs: caregiverLbs,
+            clientWeightClass: clientWeightClass,
+            clientLbs: clientLbs,
+            isMandatory: isMandatory,
+            weightClassMatch: weightClassMatch,
+            lbsMatch: lbsMatch,
+            reason: !lbsMatch ? 'insufficient_lbs_capacity' : 'weight_class_mismatch'
+        });
+    }
+
+    return {
+        passes: passes,
+        reason: (weightClassMatch && lbsMatch) ? 'weight_class_and_lbs_match'
+            : (!lbsMatch ? 'insufficient_lbs_capacity' : 'weight_class_mismatch'),
+        scoreBoost: (weightClassMatch && lbsMatch) ? 3 : 0
+    };
+}
+
+function checkSkillsRequirement(caregiverName, clientData, employeesDetails, isMandatory) {
+    var clientFields = clientData.fields || {};
+    var requiredSkills = normalizeSkillList(safeGetValue(clientFields, 'Skills_Preferences.value', ''));
+
+    if (requiredSkills.length === 0) return { passes: true, reason: 'no_skills_requirement', scoreBoost: 0, matchCount: 0, totalRequired: 0 };
+
+    var empRecord = getEmployeeRecordByName(caregiverName, employeesDetails);
+    if (!empRecord || !empRecord.fields) {
+        return { passes: false, reason: 'employee_not_found', scoreBoost: 0, matchCount: 0, totalRequired: requiredSkills.length };
+    }
+
+    var caregiverSkills = normalizeSkillList(safeGetValue(empRecord.fields, 'Skill_Type.value', ''));
+    var matchCount = 0;
+
+    for (var i = 0; i < requiredSkills.length; i++) {
+        if (caregiverSkills.indexOf(requiredSkills[i]) !== -1) matchCount++;
+    }
+
+    var allMatch = matchCount === requiredSkills.length;
+    var scoreBoost = matchCount * 1;
+
+    return {
+        passes: isMandatory ? allMatch : true,
+        reason: allMatch ? 'all_skills_match' : 'partial_skills_match',
+        scoreBoost: scoreBoost,
+        matchCount: matchCount,
+        totalRequired: requiredSkills.length
+    };
+}
+
+function checkPersonalityMatch(caregiverName, clientData, employeesDetails, isMandatory) {
+    var clientFields = clientData.fields || {};
+    var requiredPersonality = parseList(safeGetValue(clientFields, 'Personality_Match.value', ''));
+
+    if (requiredPersonality.length === 0) return { passes: true, reason: 'no_personality_preference', scoreBoost: 0, matchCount: 0 };
+
+    var empRecord = getEmployeeRecordByName(caregiverName, employeesDetails);
+    if (!empRecord || !empRecord.fields) {
+        return { passes: false, reason: 'employee_not_found', scoreBoost: 0, matchCount: 0 };
+    }
+
+    var caregiverPersonality = parseList(safeGetValue(empRecord.fields, 'Personality_Match.value', ''));
+    var matchCount = 0;
+
+    for (var i = 0; i < requiredPersonality.length; i++) {
+        if (caregiverPersonality.indexOf(requiredPersonality[i]) !== -1) matchCount++;
+    }
+
+    var hasMatch = matchCount > 0;
+    var scoreBoost = matchCount * 1;
+
+    return {
+        passes: isMandatory ? hasMatch : true,
+        reason: hasMatch ? 'personality_match' : 'personality_mismatch',
+        scoreBoost: scoreBoost,
+        matchCount: matchCount
+    };
+}
+
+function checkBlocklistStatus(caregiverName, clientData) {
+    var clientFields = clientData.fields || {};
+    var blockList = parseList(safeGetValue(clientFields, 'Caregiver_Block_List.value', ''));
+
+    if (blockList.length === 0) return { passes: true, reason: 'no_blocklist' };
+
+    var caregiverNameNorm = normName(caregiverName);
+    var isBlocked = false;
+
+    for (var i = 0; i < blockList.length; i++) {
+        if (blockList[i] === caregiverNameNorm) {
+            isBlocked = true;
+            break;
+        }
+    }
+
+    return {
+        passes: !isBlocked,
+        reason: isBlocked ? 'caregiver_blocked' : 'caregiver_not_blocked'
+    };
+}
+
+function checkCaregiverAvailability(caregiverName, employeesDetails) {
+    var empRecord = getEmployeeRecordByName(caregiverName, employeesDetails);
+    if (!empRecord || !empRecord.fields) {
+        return { passes: false, reason: 'employee_not_found', scoreBoost: 0 };
+    }
+    return { passes: true, reason: 'caregiver_available', scoreBoost: 0 };
+}
+
+// --- Step 1: Add new functions ---
+function checkClientTypeCompatibility(caregiverName, clientData, employeesDetails, isMandatory) {
+    var clientType = safeGetValue(clientData.fields, 'Client_Type.value', '');
+    var clientTypeNorm = normStr(clientType).toLowerCase();
+
+    var empRecord = getEmployeeRecordByName(caregiverName, employeesDetails);
+    if (!empRecord || !empRecord.fields) {
+        return { passes: false, reason: 'employee_not_found', scoreBoost: 0 };
+    }
+
+    var facilityEligible = normStr(safeGetValue(empRecord.fields, 'Facility.value', '')).toLowerCase() === 'yes';
+    var privateEligible = normStr(safeGetValue(empRecord.fields, 'Private.value', '')).toLowerCase() === 'yes';
+
+    var isCompatible = false;
+    var reason = '';
+
+    if (clientTypeNorm === 'facility' && facilityEligible) {
+        isCompatible = true;
+        reason = 'caregiver_eligible_for_facility';
+    } else if (clientTypeNorm === 'private' && privateEligible) {
+        isCompatible = true;
+        reason = 'caregiver_eligible_for_private';
+    } else if (facilityEligible && privateEligible) {
+        isCompatible = true;
+        reason = 'caregiver_eligible_for_both_types';
+    } else {
+        reason = 'caregiver_not_eligible_for_client_type';
+    }
+
+    return {
+        passes: isMandatory ? isCompatible : true,
+        reason: reason,
+        scoreBoost: isCompatible ? 3 : 0
+    };
+}
+
+function checkTransportationMatch(caregiverName, clientData, employeesDetails) {
+    var transportationNeeded = normStr(safeGetValue(clientData.fields, 'Transportation_Needed_.value', '')).toLowerCase() === 'yes';
+    var transferLevel = safeGetValue(clientData.fields, 'Transfer_Assistance_Level.value', '');
+    var transferLevelNorm = normStr(transferLevel).toLowerCase();
+
+    if (!transportationNeeded || transferLevelNorm === 'n/a') {
+        return { passes: true, reason: 'no_transportation_requirements', scoreBoost: 0, isPreferred: false };
+    }
+
+    var empRecord = getEmployeeRecordByName(caregiverName, employeesDetails);
+    if (!empRecord || !empRecord.fields) {
+        return { passes: true, reason: 'employee_not_found_transport_check', scoreBoost: 0, isPreferred: false };
+    }
+
+    var hasDriverLicense = normStr(safeGetValue(empRecord.fields, 'Driver_License_.value', '')).toLowerCase() === 'yes';
+    var hasCar = normStr(safeGetValue(empRecord.fields, 'Has_Car_.value', '')).toLowerCase() === 'yes';
+
+    var canProvideTransport = hasDriverLicense && hasCar;
+
+    return {
+        passes: true,
+        reason: canProvideTransport ? 'can_provide_transportation' : 'cannot_provide_transportation',
+        scoreBoost: 0,
+        isPreferred: canProvideTransport,
+        hasDriverLicense: hasDriverLicense,
+        hasCar: hasCar,
+        transportationNeeded: transportationNeeded,
+        transferLevel: transferLevel
+    };
+}
+
+// ---------------------------------------------------------------------------
+// PRIORITY EVALUATION MAIN FUNCTION
+// ---------------------------------------------------------------------------
+
+function evaluateCandidateWithPriorities(candidateName, employeeData, candidateShiftHours, settings, clientData, debugReasons, isPrimary) {
+    var allowed = true;
+    var optionalScoreAdjustment = 0;
+
+    var isFacility = isFacilityClient(clientData);
+    var lastWeekCaregiver = getLastWeekCaregiver(clientData, actualSchedulingData);
+    var isLastWeekMandatory = settings.mandatory["Last Week Caregiver"];
+    var isLastWeekCaregiver = lastWeekCaregiver && normName(lastWeekCaregiver) === normName(candidateName);
+
+    for (var i = 0; i < settings.order.length; i++) {
+        var priorityName = settings.order[i];
+        var priorityNorm = normStr(priorityName).toLowerCase();
+
+        if (!settings.active[priorityName]) continue;
+
+        var isMandatory = settings.mandatory[priorityName];
+        var debugEntry = {
+            priority: priorityName,
+            allowed: true,
+            scoreAdjustment: 0,
+            reason: ''
+        };
+
+        if (priorityName === "Last Week Caregiver" || priorityName === "Last Week Caregivers") {
+            debugEntry.allowed = true;  // Don't block based on this alone
+            debugEntry.scoreAdjustment = isLastWeekCaregiver ? 10 : 0;
+            debugEntry.reason = isLastWeekCaregiver ? 'worked_last_week_bonus_points' : 'did_not_work_last_week';
+
+            // Only add score boost, don't make it mandatory blocking condition here
+            // The actual mandatory enforcement happens in the sorting logic above
+            optionalScoreAdjustment += debugEntry.scoreAdjustment;
+        }
+        else if (priorityName === "Caregiver Availability") {
+            var availabilityResult = checkCaregiverAvailability(candidateName, employeesDetails);
+            debugEntry.allowed = true;
+            debugEntry.scoreAdjustment = availabilityResult.scoreBoost || 0;
+            debugEntry.reason = availabilityResult.reason || 'availability_checked';
+            optionalScoreAdjustment += debugEntry.scoreAdjustment;
+        }
+        else if (priorityName === "Client Gender Preference" || priorityName === "Gender Preference") {
+            var genderResult = checkGenderPreference(candidateName, clientData, employeesDetails, isMandatory);
+            debugEntry.allowed = genderResult.passes;
+            debugEntry.scoreAdjustment = genderResult.scoreBoost || 0;
+            debugEntry.reason = genderResult.reason || 'gender_checked';
+
+            var clientFields = clientData.fields || {};
+            var hasStrictGenderReq = normStr(safeGetValue(clientFields, 'Gender_Preference_Strict.value', '')).toLowerCase() === 'yes';
+
+            // CHANGE THIS - Only block if client specifically set strict=yes
+            if (hasStrictGenderReq && !genderResult.passes) {
+                allowed = false;
+                debugReasons.push(debugEntry);
+                return false;
+            }
+
+            // Always add score boost for gender matches when global setting is active
+            if (isMandatory || genderResult.passes) {
+                optionalScoreAdjustment += debugEntry.scoreAdjustment;
+            }
+        }
+        else if (priorityName === "Client Language Preference" || priorityName === "Language Preference") {
+            var langResult = checkLanguagePreference(candidateName, clientData, employeesDetails, isMandatory);
+            debugEntry.allowed = langResult.passes;
+            debugEntry.scoreAdjustment = langResult.scoreBoost || 0;
+            debugEntry.reason = langResult.reason + ' (' + (langResult.matchCount || 0) + '/' + (langResult.totalRequired || 0) + ')';
+
+            var clientFields = clientData.fields || {};
+            var hasLangReq = parseList(safeGetValue(clientFields, 'Language_Preferences.value', '')).length > 0;
+
+            if (isMandatory && hasLangReq && !langResult.passes) {
+                allowed = false;
+                debugReasons.push(debugEntry);
+                return false;
+            }
+
+            optionalScoreAdjustment += debugEntry.scoreAdjustment;
+        }
+        else if (priorityName === "Caregiver Physical Capability" || priorityName === "Physical Capability") {
+            var physResult = checkPhysicalCapability(candidateName, clientData, employeesDetails, isMandatory);
+            debugEntry.allowed = physResult.passes;
+            debugEntry.scoreAdjustment = physResult.scoreBoost || 0;
+            debugEntry.reason = physResult.reason || 'physical_capability_checked';
+
+            var clientFields = clientData.fields || {};
+            var hasPhysicalReq = safeParseNumber(safeGetValue(clientFields, 'Physical_Capability_lbs.value', 0), 0) > 0 ||
+                normStr(safeGetValue(clientFields, 'Weight_Class.value', '')) !== '';
+
+            // FIXED: Always enforce when mandatory OR when client has specific requirements
+            if ((isMandatory && hasPhysicalReq) && !physResult.passes) {
+                allowed = false;
+                debugReasons.push(debugEntry);
+                return false;
+            }
+
+            optionalScoreAdjustment += debugEntry.scoreAdjustment;
+        }
+        else if (priorityName === "Caregiver Skills" || priorityName === "Skills") {
+            var skillsResult = checkSkillsRequirement(candidateName, clientData, employeesDetails, isMandatory);
+            debugEntry.allowed = skillsResult.passes;
+            debugEntry.scoreAdjustment = skillsResult.scoreBoost || 0;
+            debugEntry.reason = skillsResult.reason + ' (' + (skillsResult.matchCount || 0) + '/' + (skillsResult.totalRequired || 0) + ')';
+
+            var clientFields = clientData.fields || {};
+            var hasSkillReq = parseList(safeGetValue(clientFields, 'Skills_Preferences.value', '')).length > 0;
+
+            if (isMandatory && hasSkillReq && !skillsResult.passes) {
+                allowed = false;
+                debugReasons.push(debugEntry);
+                return false;
+            }
+
+            optionalScoreAdjustment += debugEntry.scoreAdjustment;
+        }
+        else if (priorityName === "Personality Match" || priorityName === "Personality") {
+            var personalityResult = checkPersonalityMatch(candidateName, clientData, employeesDetails, isMandatory);
+            debugEntry.allowed = true;
+            debugEntry.scoreAdjustment = personalityResult.scoreBoost || 0;
+            debugEntry.reason = personalityResult.reason + ' (matches: ' + (personalityResult.matchCount || 0) + ')';
+            optionalScoreAdjustment += debugEntry.scoreAdjustment;
+        }
+        else if (priorityName === "Blocklisted Caregivers") {
+            var blockResult = checkBlocklistStatus(candidateName, clientData);
+            debugEntry.allowed = blockResult.passes;
+            debugEntry.scoreAdjustment = 0;
+            debugEntry.reason = blockResult.reason || 'blocklist_checked';
+
+            if (!blockResult.passes) {
+                allowed = false;
+                debugReasons.push(debugEntry);
+                return false;
+            }
+        }
+        else if (priorityName === "Max Service Hours with Client" || priorityName === "Max Service Hours with Client (based on selected days)" || priorityName === "Client Service Hours") {
+            var clientHours = calculateClientSpecificHours(candidateName, clientData, actualSchedulingData);
+            var scoreBoost = Math.min(clientHours * 0.5, 15);
+
+            debugEntry.allowed = true;
+            debugEntry.scoreAdjustment = scoreBoost;
+            debugEntry.reason = 'client_hours: ' + clientHours + ', score_boost: ' + scoreBoost;
+            optionalScoreAdjustment += debugEntry.scoreAdjustment;
+        }
+        else if (priorityName === "Facility Clients Priority" || priorityName === "Facility Priority") {
+            var facilityBoost = isFacility ? 8 : 0;
+            debugEntry.allowed = true;
+            debugEntry.scoreAdjustment = facilityBoost;
+            debugEntry.reason = isFacility ? 'facility_client_priority' : 'non_facility_client';
+            optionalScoreAdjustment += debugEntry.scoreAdjustment;
+        }
+        else if (priorityName === "Weekly Min/Max Hours Compliance") {
+            var weeklyResult = weeklyDistributionCheck(employeeData, candidateShiftHours, settings, true);
+
+            debugEntry.allowed = weeklyResult.allowed;
+            debugEntry.scoreAdjustment = weeklyResult.scoreAdjustment || 0;
+            debugEntry.reason = weeklyResult.reason || 'weekly_hours_checked';
+
+            if (weeklyResult.wouldExceedMax) {
+                allowed = false;
+                debugReasons.push(debugEntry);
+                return false;
+            }
+
+            optionalScoreAdjustment += weeklyResult.scoreAdjustment;
+        }
+        // --- Step 2: Add new priorities ---
+        else if (priorityNorm === "client type compatibility") {
+            var clientTypeResult = checkClientTypeCompatibility(candidateName, clientData, employeesDetails, isMandatory);
+            debugEntry.allowed = clientTypeResult.passes;
+            debugEntry.scoreAdjustment = clientTypeResult.scoreBoost || 0;
+            debugEntry.reason = clientTypeResult.reason || 'client_type_checked';
+
+            if (isMandatory && !clientTypeResult.passes) {
+                allowed = false;
+                debugReasons.push(debugEntry);
+                return false;
+            }
+
+            optionalScoreAdjustment += debugEntry.scoreAdjustment;
+        }
+        else if (
+            priorityName === "Transportation Match" ||
+            priorityName === "Transportation Needed Check for Client"
+        ) {
+            var transportResult = checkTransportationMatch(candidateName, clientData, employeesDetails);
+            debugEntry.allowed = transportResult.passes;
+            debugEntry.scoreAdjustment = 0;
+            debugEntry.reason = transportResult.reason +
+                ' (License: ' + (transportResult.hasDriverLicense ? 'Yes' : 'No') +
+                ', Car: ' + (transportResult.hasCar ? 'Yes' : 'No') +
+                ', Preferred: ' + (transportResult.isPreferred ? 'Yes' : 'No') + ')';
+        }
+        else {
+            debugEntry.allowed = true;
+            debugEntry.scoreAdjustment = 0;
+            debugEntry.reason = 'priority_not_implemented: ' + priorityName;
+        }
+
+        debugReasons.push(debugEntry);
+    }
+
+    return allowed;
+}
+
+// ---------------------------------------------------------------------------
+// CONFLICT CHECKING
+// ---------------------------------------------------------------------------
+
+function checkScheduleConflicts(caregiverName, targetClientId, targetStartTime, targetEndTime, targetDate, allSchedules, globalAssignedCaregivers) {
+    var conflicts = [];
+
+    if (!isCaregiverAvailable(caregiverName, targetClientId, targetDate, targetStartTime, targetEndTime)) {
+        if (globalCaregiverTimeSlots[caregiverName]) {
+            var assignments = globalCaregiverTimeSlots[caregiverName];
+
+            for (var i = 0; i < assignments.length; i++) {
+                var assignment = assignments[i];
+
+                // if (assignment.clientId === targetClientId) continue; 
+
+                if (assignment.date === targetDate &&
+                    timeOverlap(targetStartTime, targetEndTime, assignment.startTime, assignment.endTime)) {
+
+                    conflicts.push({
+                        caregiverName: caregiverName,
+                        conflictType: 'time_overlap',
+                        date: targetDate,
+                        existingClient: assignment.clientId,
+                        existingTime: assignment.startTime + '-' + assignment.endTime,
+                        targetTime: targetStartTime + '-' + targetEndTime
+                    });
+                }
+            }
+        }
+    }
+    return conflicts;
+}
+
+// ---------------------------------------------------------------------------
+// GHOST SHIFTS FUNCTIONALITY
+// ---------------------------------------------------------------------------
+
+// Build a blocklist for ghost shift assignment with overlap logic
+var ghostShiftBlocklistArr = [];
+for (var c = 0; c < result.allClientAssignments.length; c++) {
+    var clientAssignment = result.allClientAssignments[c];
+    for (var s = 0; s < clientAssignment.scheduledServices.length; s++) {
+        var service = clientAssignment.scheduledServices[s];
+        var availableList = service.availableCaregiversList || [];
+        for (var i = 0; i < availableList.length; i++) {
+            var caregiver = availableList[i];
+            ghostShiftBlocklistArr.push({
+                caregiverName: caregiver.caregiverName,
+                date: service.date,
+                startTime: service.startTime,
+                endTime: service.endTime
+            });
+        }
+    }
+}
+
+function isCaregiverBlockedForGhostShift(caregiverName, date, startTime, endTime) {
+    var cgNorm = normName(caregiverName);
+    for (var i = 0; i < ghostShiftBlocklistArr.length; i++) {
+        var entry = ghostShiftBlocklistArr[i];
+        if (
+            normName(entry.caregiverName) === cgNorm &&
+            entry.date === date &&
+            timeOverlap(startTime, endTime, entry.startTime, entry.endTime)
+        ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function isGhostCaregiverForDate(caregiverName, date, startTime, endTime, ghostShifts) {
+    if (!caregiverName || !date || !ghostShifts || !ghostShifts.length) return false;
+
+    var caregiverNameNorm = normName(caregiverName);
+
+    for (var i = 0; i < ghostShifts.length; i++) {
+        var shift = ghostShifts[i];
+        if (
+            shift.date === date &&
+            normName(shift.caregiverName) === caregiverNameNorm &&
+            timeOverlap(startTime, endTime, shift.startTime, shift.endTime)
+        ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function getEligibleGhostCaregivers(employeesDetails) {
+    var eligible = [];
+
+    if (!isArray(employeesDetails)) return eligible;
+
+    for (var i = 0; i < employeesDetails.length; i++) {
+        var emp = employeesDetails[i];
+        if (!emp || !emp.fields) continue;
+
+        var isEmergencyAvailable = normStr(safeGetValue(emp.fields, 'LastMinute_Ready_Ghost_Pool_.value', '')).toLowerCase() === 'yes';
+
+        if (isEmergencyAvailable) {
+            var name = safeGetValue(emp.fields, 'Employee_Full_Name.value', '');
+            var empId = emp.id || '';
+
+            if (name) {
+                eligible.push({ name: name, id: empId });
+            }
+        }
+    }
+
+    return eligible;
+}
+
+function assignGhostCaregiversToShifts(shifts, employeesDetails, caregiverTimeSlots) {
+    var eligibleCaregivers = getEligibleGhostCaregivers(employeesDetails);
+
+    // --- FIX: Use round-robin instead of random for fair distribution ---
+    var caregiverDayAssignments = {};
+    var caregiverWeekAssignments = {};
+    eligibleCaregivers.forEach(function (cg) {
+        caregiverDayAssignments[cg.name] = {};
+        caregiverWeekAssignments[cg.name] = 0;
+    });
+
+    var caregiverIndex = 0;
+    for (var i = 0; i < shifts.length; i++) {
+        var shift = shifts[i];
+        var assigned = false;
+        var attempts = 0;
+        var totalCaregivers = eligibleCaregivers.length;
+
+        // Try each caregiver in round-robin order
+        while (!assigned && attempts < totalCaregivers) {
+            var caregiver = eligibleCaregivers[caregiverIndex % totalCaregivers];
+
+            // Block caregivers who are in availableCaregiversList for this date/time
+            if (isCaregiverBlockedForGhostShift(caregiver.name, shift.date, shift.startTime, shift.endTime)) {
+                caregiverIndex++;
+                attempts++;
+                continue;
+            }
+
+            // Check if already assigned a ghost shift on this date
+            if (caregiverDayAssignments[caregiver.name][shift.date]) {
+                caregiverIndex++;
+                attempts++;
+                continue;
+            }
+
+            // Check if caregiver is on leave
+            var isOnLeave = isCaregiverOnLeave(caregiver.name, shift.date, leavesData, shift.startTime, shift.endTime);
+            if (isOnLeave) {
+                caregiverIndex++;
+                attempts++;
+                continue;
+            }
+
+            // Check if caregiver has ANY client assignments on this date
+            if (caregiverTimeSlots[caregiver.name]) {
+                var assignments = caregiverTimeSlots[caregiver.name];
+                var hasAssignment = assignments.some(function (a) { return a.date === shift.date; });
+                if (hasAssignment) {
+                    caregiverIndex++;
+                    attempts++;
+                    continue;
+                }
+            }
+
+            // Assign caregiver to this shift
+            shift.caregiverName = caregiver.name;
+            shift.caregiverEmployeeId = caregiver.id;
+            caregiverDayAssignments[caregiver.name][shift.date] = true;
+            caregiverWeekAssignments[caregiver.name]++;
+            assigned = true;
+            caregiverIndex++;
+        }
+    }
+
+    return shifts;
+}
+
+function createGhostShifts(next7Days, employeesDetails) {
+    var shifts = [];
+    var shiftsPerDay = 4;
+
+    var shiftTimes = [
+        { startTime: 0, endTime: 720 },    // 12:00 AM - 12:00 PM (AM1)
+        { startTime: 0, endTime: 720 },    // 12:00 AM - 12:00 PM (AM2)
+        { startTime: 720, endTime: 1440 }, // 12:00 PM - 12:00 AM (PM1)
+        { startTime: 720, endTime: 1440 }  // 12:00 PM - 12:00 AM (PM2)
+    ];
+
+    for (var d = 0; d < next7Days.length; d++) {
+        var day = next7Days[d];
+
+        for (var s = 0; s < shiftsPerDay; s++) {
+            shifts.push({
+                id: 'ghost_' + day.iso + '_' + s,
+                date: day.iso,
+                day: day.day,
+                startTime: shiftTimes[s].startTime,
+                endTime: shiftTimes[s].endTime,
+                startTimeStr: minutesToHHMM(shiftTimes[s].startTime),
+                endTimeStr: minutesToHHMM(shiftTimes[s].endTime),
+                caregiverName: '',
+                caregiverEmployeeId: '',
+                isGhostShift: true
+            });
+        }
+    }
+
+    return assignGhostCaregiversToShifts(shifts, employeesDetails, globalCaregiverTimeSlots);
+}
+
+// ---------------------------------------------------------------------------
+// MAIN ASSIGNMENT FUNCTION
+// ---------------------------------------------------------------------------
+function assignCaregiverToSchedule(clientData, dayObj, schedule, employeesDetails,
+    leavesData, allClientSchedules, globalAssignedCaregivers,
+    clientCaregiverHours, globalCaregiverHours, actualSchedulingData) {
+
+    var res = {
+        assignedCaregiver: '',
+        isAvailable: false,
+        conflictsFound: [],
+        availabilityIssues: [],
+        finalAvailabilityIssue: null,
+        primaryCaregiverChecked: false,
+        availableCaregiversList: [],
+        assignedCaregiverScore: null,
+        assignedCaregiverWeightedTotal: null,
+        assignedCaregiverWeightedBreakdown: null,
+        debugReasons: [],
+        assignmentMethod: 'normal'
+    };
+
+    var clientId = clientData.id;
+    var clientName = safeGetValue(clientData, 'fields.Client_Full_Name.value', '');
+    var primaryCaregiverName = normStr(safeGetValue(clientData, 'fields.Primary_Caregiver.value', ''));
+
+    var candidateShiftHours = Math.round(((schedule.endTime - schedule.startTime) / 60) * 10) / 10;
+
+    // Check if the client subscription is valid
+    if (!isClientSubscriptionValid(clientData, dayObj.iso)) {
+        res.finalAvailabilityIssue = 'client_subscription_invalid';
+        res.debugReasons.push({
+            priority: 'Client Subscription Validity',
+            allowed: false,
+            scoreAdjustment: 0,
+            reason: "Client subscription is not valid for the given date (" + dayObj.iso + "). Valid range: " +
+                safeGetValue(clientData.fields, 'Effective_From.value', 'N/A') + " to " +
+                safeGetValue(clientData.fields, 'Effective_To.value', 'N/A')
+        });
+        return null;
+    }
+
+    // Check if the client is on leave
+    if (isClientOnLeave(clientId, dayObj.iso, schedule.startTime, schedule.endTime, clientLeaves)) {
+        res.finalAvailabilityIssue = 'client_on_leave';
+        res.debugReasons.push({
+            priority: 'Client Leave Status',
+            allowed: false,
+            scoreAdjustment: 0,
+            reason: 'Client is on leave during the scheduled time'
+        });
+        return null;
+    }
+
+    // **NEW STEP 1: Try to copy exact last week schedule first**
+    var lastWeekCompleteSchedule = getLastWeekCompleteSchedule(clientData, actualSchedulingData, [dayObj]);
+
+    if (lastWeekCompleteSchedule && lastWeekCompleteSchedule[dayObj.day]) {
+        var daySchedule = lastWeekCompleteSchedule[dayObj.day];
+
+        // Find matching time slot from last week
+        var matchingAssignment = null;
+        for (var a = 0; a < daySchedule.assignments.length; a++) {
+            var assignment = daySchedule.assignments[a];
+            if (assignment.startTimeMinutes === schedule.startTime &&
+                assignment.endTimeMinutes === schedule.endTime) {
+                matchingAssignment = assignment;
+                break;
+            }
+        }
+
+        if (matchingAssignment) {
+            var lastWeekCaregiver = matchingAssignment.caregiverName;
+
+            res.debugReasons.push({
+                priority: 'Last Week Schedule Copy',
+                allowed: true,
+                scoreAdjustment: 0,
+                reason: 'Found exact matching schedule from last week: ' + lastWeekCaregiver +
+                    ' (' + dayObj.day + ' ' + matchingAssignment.startTime + '-' + matchingAssignment.endTime + ')'
+            });
+
+            // **ENHANCED VALIDATION: Check all blocking conditions before copying**
+            var canCopyAssignment = true;
+            var conflictReason = '';
+
+            // 1. Check if caregiver is on leave
+            var isCaregiverOnLeaveNow = isCaregiverOnLeave(lastWeekCaregiver, dayObj.iso, leavesData, schedule.startTime, schedule.endTime);
+            if (isCaregiverOnLeaveNow) {
+                canCopyAssignment = false;
+                conflictReason = 'caregiver_on_leave';
+            }
+
+            // 2. **NEW: Check if caregiver is blocked by client**
+            if (canCopyAssignment) {
+                var blockResult = checkBlocklistStatus(lastWeekCaregiver, clientData);
+                if (!blockResult.passes) {
+                    canCopyAssignment = false;
+                    conflictReason = 'caregiver_blocked_by_client';
+                }
+            }
+
+            // 3. Check if caregiver has time conflict
+            if (canCopyAssignment) {
+                var hasTimeConflict = !isCaregiverAvailable(lastWeekCaregiver, clientId, dayObj.iso, schedule.startTime, schedule.endTime);
+                if (hasTimeConflict) {
+                    canCopyAssignment = false;
+                    conflictReason = 'caregiver_time_conflict';
+                }
+            }
+
+            // 4. **NEW: Check if caregiver is available for the time slot (day/shift availability)**
+            // if (canCopyAssignment) {
+            //     var isAvailableForTimeSlot = isCaregiverAvailableForSchedule(lastWeekCaregiver, dayObj.day, schedule.startTime, schedule.endTime, employeesDetails);
+            //     if (!isAvailableForTimeSlot) {
+            //         canCopyAssignment = false;
+            //         conflictReason = 'caregiver_not_available_for_time_slot';
+            //     }
+            // }
+
+            // 5. **NEW: Check weekly hours limits**
+            if (canCopyAssignment) {
+                var empRecord = getEmployeeRecordByName(lastWeekCaregiver, employeesDetails);
+                if (empRecord) {
+                    var weeklyResult = weeklyDistributionCheck(empRecord, candidateShiftHours, {}, false);
+                    if (weeklyResult.wouldExceedMax) {
+                        canCopyAssignment = false;
+                        conflictReason = 'would_exceed_max_weekly_hours';
+                    }
+                }
+            }
+
+            if (canCopyAssignment) {
+                // SUCCESS! Copy the exact assignment from last week
+                res.assignedCaregiver = lastWeekCaregiver;
+                res.isAvailable = true;
+                res.assignmentMethod = 'last_week_copy';
+                res.debugReasons.push({
+                    priority: 'Last Week Schedule Copied Successfully',
+                    allowed: true,
+                    scoreAdjustment: 200,
+                    reason: 'Successfully copied exact schedule from last week: ' + lastWeekCaregiver +
+                        ' (passed all validation checks: leave status, blocklist, time conflicts, availability, weekly hours)'
+                });
+
+                // Update global tracking
+                var assignmentKey = clientId + '_' + dayObj.iso + '_' + schedule.startTime;
+                globalAssignedCaregivers[assignmentKey] = lastWeekCaregiver;
+
+                var shiftHours = Math.round(((schedule.endTime - schedule.startTime) / 60) * 10) / 10;
+                globalCaregiverHours[normName(lastWeekCaregiver)] =
+                    (globalCaregiverHours[normName(lastWeekCaregiver)] || 0) + shiftHours;
+
+                clientCaregiverHours[lastWeekCaregiver] =
+                    (clientCaregiverHours[lastWeekCaregiver] || 0) + shiftHours;
+
+                if (!globalCaregiverTimeSlots[lastWeekCaregiver]) {
+                    globalCaregiverTimeSlots[lastWeekCaregiver] = [];
+                }
+
+                globalCaregiverTimeSlots[lastWeekCaregiver].push({
+                    clientId: clientId,
+                    date: dayObj.iso,
+                    startTime: schedule.startTime,
+                    endTime: schedule.endTime
+                });
+
+                if (primaryCaregiverName) {
+                    res.primaryCaregiverChecked = true;
+                }
+
+                // Set scoring for consistency
+                res.assignedCaregiverScore = 200;
+                res.assignedCaregiverWeightedTotal = 200;
+                res.assignedCaregiverWeightedBreakdown = {
+                    language: 0,
+                    skills: 0,
+                    historical: 200,
+                    workHours: 0
+                };
+
+                return res;
+            } else {
+                // Cannot copy - explain why and proceed with normal assignment
+                res.debugReasons.push({
+                    priority: 'Last Week Schedule Copy Failed',
+                    allowed: false,
+                    scoreAdjustment: 0,
+                    reason: 'Cannot copy last week assignment (' + lastWeekCaregiver + ') due to: ' + conflictReason +
+                        '. Proceeding with normal assignment process.'
+                });
+            }
+        } else {
+            res.debugReasons.push({
+                priority: 'No Matching Last Week Schedule',
+                allowed: false,
+                scoreAdjustment: 0,
+                reason: 'No matching time slot found in last week schedule for ' + dayObj.day +
+                    ' ' + minutesToHHMM(schedule.startTime) + '-' + minutesToHHMM(schedule.endTime) +
+                    '. Proceeding with normal assignment process.'
+            });
+        }
+    } else {
+        res.debugReasons.push({
+            priority: 'No Last Week Schedule Data',
+            allowed: false,
+            scoreAdjustment: 0,
+            reason: 'No last week schedule found for this client. Proceeding with normal assignment process.'
+        });
+    }
+
+    // **STEP 2: Try to assign individual last week caregiver (existing logic with enhanced validation)**
+    var lastWeekCaregiver = getLastWeekCaregiver(clientData, actualSchedulingData);
+
+    if (lastWeekCaregiver) {
+        res.debugReasons.push({
+            priority: 'Last Week Caregiver Found',
+            allowed: true,
+            scoreAdjustment: 0,
+            reason: 'Found last week caregiver: ' + lastWeekCaregiver + '. Checking availability...'
+        });
+
+        var canAssignLastWeekCaregiver = true;
+        var lastWeekConflictReason = '';
+
+        // 1. Check if last week caregiver is on leave
+        var isLastWeekOnLeave = isCaregiverOnLeave(lastWeekCaregiver, dayObj.iso, leavesData, schedule.startTime, schedule.endTime);
+        if (isLastWeekOnLeave) {
+            canAssignLastWeekCaregiver = false;
+            lastWeekConflictReason = 'caregiver_on_leave';
+        }
+
+        // 2. **NEW: Check if caregiver is blocked by client**
+        if (canAssignLastWeekCaregiver) {
+            var blockResult = checkBlocklistStatus(lastWeekCaregiver, clientData);
+            if (!blockResult.passes) {
+                canAssignLastWeekCaregiver = false;
+                lastWeekConflictReason = 'caregiver_blocked_by_client';
+            }
+        }
+
+        // 3. Check basic time availability
+        if (canAssignLastWeekCaregiver) {
+            var isLastWeekTimeAvailable = isCaregiverAvailable(lastWeekCaregiver, clientId, dayObj.iso, schedule.startTime, schedule.endTime);
+            if (!isLastWeekTimeAvailable) {
+                canAssignLastWeekCaregiver = false;
+                lastWeekConflictReason = 'caregiver_time_conflict';
+            }
+        }
+
+        // 4. Check time slot availability
+        // if (canAssignLastWeekCaregiver) {
+        //     var isAvailableForTimeSlot = isCaregiverAvailableForSchedule(lastWeekCaregiver, dayObj.day, schedule.startTime, schedule.endTime, employeesDetails);
+        //     if (!isAvailableForTimeSlot) {
+        //         canAssignLastWeekCaregiver = false;
+        //         lastWeekConflictReason = 'caregiver_not_available_for_time_slot';
+        //     }
+        // }
+
+        if (canAssignLastWeekCaregiver) {
+            // SUCCESS! Assign last week caregiver immediately
+            res.assignedCaregiver = lastWeekCaregiver;
+            res.isAvailable = true;
+            res.assignmentMethod = 'last_week_caregiver';
+            res.debugReasons.push({
+                priority: 'Last Week Caregiver Assignment',
+                allowed: true,
+                scoreAdjustment: 100,
+                reason: 'Successfully assigned last week caregiver: ' + lastWeekCaregiver +
+                    ' (passed all validation checks: leave status, blocklist, time conflicts, availability)'
+            });
+
+            // Update global tracking (same as before)
+            var assignmentKey = clientId + '_' + dayObj.iso + '_' + schedule.startTime;
+            globalAssignedCaregivers[assignmentKey] = lastWeekCaregiver;
+
+            var shiftHours = Math.round(((schedule.endTime - schedule.startTime) / 60) * 10) / 10;
+            globalCaregiverHours[normName(lastWeekCaregiver)] =
+                (globalCaregiverHours[normName(lastWeekCaregiver)] || 0) + shiftHours;
+
+            clientCaregiverHours[lastWeekCaregiver] =
+                (clientCaregiverHours[lastWeekCaregiver] || 0) + shiftHours;
+
+            if (!globalCaregiverTimeSlots[lastWeekCaregiver]) {
+                globalCaregiverTimeSlots[lastWeekCaregiver] = [];
+            }
+
+            globalCaregiverTimeSlots[lastWeekCaregiver].push({
+                clientId: clientId,
+                date: dayObj.iso,
+                startTime: schedule.startTime,
+                endTime: schedule.endTime
+            });
+
+            if (primaryCaregiverName) {
+                res.primaryCaregiverChecked = true;
+            }
+
+            res.assignedCaregiverScore = 100;
+            res.assignedCaregiverWeightedTotal = 100;
+            res.assignedCaregiverWeightedBreakdown = {
+                language: 0,
+                skills: 0,
+                historical: 100,
+                workHours: 0
+            };
+
+            return res;
+        } else {
+            res.debugReasons.push({
+                priority: 'Last Week Caregiver Not Available',
+                allowed: false,
+                scoreAdjustment: 0,
+                reason: 'Last week caregiver (' + lastWeekCaregiver + ') failed validation due to: ' + lastWeekConflictReason +
+                    '. Proceeding with normal assignment process.'
+            });
+        }
+    } else {
+        res.debugReasons.push({
+            priority: 'No Last Week Caregiver',
+            allowed: false,
+            scoreAdjustment: 0,
+            reason: 'No last week caregiver found. Proceeding with normal assignment process.'
+        });
+    }
+
+    // **STEP 3: If neither last week copying nor individual caregiver works, proceed with FULL evaluation**
+    res.debugReasons.push({
+        priority: 'Normal Assignment Process',
+        allowed: true,
+        scoreAdjustment: 0,
+        reason: 'Starting full caregiver evaluation with all conditions and priorities...'
+    });
+    res.assignmentMethod = 'normal';
+
+    // Continue with existing logic (rest of the function remains unchanged)...
+    var settings = getPrioritySettings(settingsTableData);
+    var prefs = extractClientPrefs(clientData);
+
+    var allNames = getAllCaregiverNames(employeesDetails);
+    var availableCaregivers = [];
+    var basicAvailableCaregivers = [];
+    var dimensionStats = [];
+
+    for (var ac = 0; ac < allNames.length; ac++) {
+        var cand = allNames[ac];
+        var candidateResult = {
+            caregiverName: cand,
+            status: 'Evaluating',
+            totalScore: 0,
+            priorityScore: 0,
+            optionalScore: 0,
+            evaluationResults: [],
+            isPrimary: primaryCaregiverName && normName(cand) === normName(primaryCaregiverName),
+            clientHours: clientCaregiverHours[cand] || 0,
+            globalHours: globalCaregiverHours[normName(cand)] || 0, // <-- FIXED
+            rank: 0,
+            rejectionReason: null,
+            passedBasicChecks: false
+        };
+
+        var isBasicAvailable = checkCaregiverAvailabilityByType(cand, dayObj.day, schedule.startTime, schedule.endTime, employeesDetails, caregiverAvailability);
+        if (!isBasicAvailable) {
+            candidateResult.status = 'Not Available - Time Slot';
+            candidateResult.rejectionReason = 'not_available_for_time_slot';
+            continue;
+        }
+
+        var isOnLeave = isCaregiverOnLeave(cand, dayObj.iso, leavesData, schedule.startTime, schedule.endTime);
+        if (isOnLeave) {
+            candidateResult.status = 'Not Available - On Leave';
+            candidateResult.rejectionReason = 'on_leave';
+            continue;
+        }
+
+        var isAvailableForTimeSlot = isCaregiverAvailable(cand, clientId, dayObj.iso, schedule.startTime, schedule.endTime);
+        if (!isAvailableForTimeSlot) {
+            candidateResult.status = 'Not Available - Time Conflict';
+            candidateResult.rejectionReason = 'time_slot_conflict';
+            continue;
+        }
+
+        var candConflicts = checkScheduleConflicts(cand, clientId, schedule.startTime, schedule.endTime, dayObj.iso, allClientSchedules, globalAssignedCaregivers);
+        if (candConflicts.length > 0) {
+            candidateResult.status = 'Not Available - Conflict';
+            candidateResult.rejectionReason = 'schedule_conflict';
+            candidateResult.conflictDetails = candConflicts;
+            continue;
+        }
+
+        var empRec = getEmployeeRecordByName(cand, employeesDetails);
+        if (!empRec) {
+            candidateResult.status = 'Not Available - No Record';
+            candidateResult.rejectionReason = 'employee_record_not_found';
+            continue;
+        }
+
+        var profile = getCaregiverProfile(empRec);
+
+        if (prefs.blockList && prefs.blockList.length && isBlockedByClient(prefs, cand)) {
+            candidateResult.status = 'Not Available - Blocked';
+            candidateResult.rejectionReason = 'blocked_by_client';
+            continue;
+        }
+
+        // --- Step 3: Add mandatory client type check ---
+        var clientTypeCheck = checkClientTypeCompatibility(cand, clientData, employeesDetails, true);
+        if (!clientTypeCheck.passes) {
+            candidateResult.status = 'Not Available - Client Type Incompatible';
+            candidateResult.rejectionReason = 'client_type_incompatible';
+            continue;
+        }
+
+        var weeklyResult = weeklyDistributionCheck(empRec, candidateShiftHours, {}, false);
+        if (weeklyResult.wouldExceedMax) {
+            candidateResult.status = 'Not Available - Max Hours Exceeded';
+            candidateResult.rejectionReason = 'exceeds_max_weekly_hours';
+            continue;
+        }
+
+        candidateResult.passedBasicChecks = true;
+        basicAvailableCaregivers.push(candidateResult);
+
+        var candidateDebugReasons = [];
+        var passedPriorityCheck = evaluateCandidateWithPriorities(cand, empRec, candidateShiftHours, settings, clientData, candidateDebugReasons, candidateResult.isPrimary);
+
+        candidateResult.evaluationResults = candidateDebugReasons;
+
+        var priorityScore = calculateTotalScore(candidateDebugReasons);
+        var optScore = scoreOptional(prefs, profile);
+        var totalScore = priorityScore + optScore;
+
+        candidateResult.totalScore = totalScore;
+        candidateResult.priorityScore = priorityScore;
+        candidateResult.optionalScore = optScore;
+
+        var rawLanguageMatches = 0;
+        if (prefs.langs.length && profile && profile.langs.length) {
+            for (var li = 0; li < prefs.langs.length; li++) {
+                if (profile.langs.indexOf(prefs.langs[li]) !== -1) rawLanguageMatches++;
+            }
+        }
+
+        var rawSkillMatches = 0;
+        if (prefs.skills.length && profile && profile.skills.length) {
+            for (var si = 0; si < prefs.skills.length; si++) {
+                if (profile.skills.indexOf(prefs.skills[si]) !== -1) rawSkillMatches++;
+            }
+        }
+
+        var rawHistoricalCount = getHistoricalCount(cand, clientName, actualSchedulingData, HISTORICAL_LOOKBACK_DAYS);
+
+        var maxWeeklyHours = safeParseNumber(safeGetValue((empRec || {}).fields || {}, 'Max_Weekly_Hours.value', 0), 0);
+        var scheduleDate = dayObj.iso;
+        var parts = scheduleDate.split('-');
+        var y = Number(parts[0]), m = Number(parts[1]), d = Number(parts[2]);
+        var dateObj = { y: y, m: m, d: d };
+        var jsDay = (function (y, m, d) {
+            // Zeller's congruence, 0=Sunday
+            var t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+            if (m < 3) y -= 1;
+            return (y + Math.floor(y / 4) - Math.floor(y / 100) + Math.floor(y / 400) + t[m - 1] + d) % 7;
+        })(y, m, d);
+        var mondayOffset = ((jsDay + 6) % 7);
+        var mondayD = d - mondayOffset;
+        var sundayD = mondayD + 6;
+        var weekStartDate = dateObjToISO(y, m, mondayD);
+        var weekEndDate = dateObjToISO(y, m, sundayD);
+
+        var workedSoFar = getCaregiverWorkedHoursThisWeek(cand, actualSchedulingData, weekStartDate, weekEndDate) + (globalCaregiverHours[normName(cand)] || 0);
+
+        var remainingCapacity = maxWeeklyHours > 0 ? Math.max(0, maxWeeklyHours - workedSoFar) : 0;
+        var rawWorkHours = remainingCapacity;
+
+        dimensionStats.push({
+            caregiverName: cand,
+            rawLanguage: rawLanguageMatches,
+            rawSkills: rawSkillMatches,
+            rawHistorical: rawHistoricalCount,
+            rawWorkHours: rawWorkHours
+        });
+
+        if (passedPriorityCheck) {
+            candidateResult.status = 'Available';
+            availableCaregivers.push(candidateResult);
+        } else {
+            candidateResult.status = 'Not Available - Priority Check Failed';
+            candidateResult.rejectionReason = 'failed_priority_checks';
+        }
+
+        // Early exit optimization: if we have 5+ suitable caregivers, stop evaluating
+        if (availableCaregivers.length >= 5) {
+            break; // Exit the caregiver loop early
+        }
+    }
+
+    // After availableCaregivers is built, before sorting:
+    var lastWeekCaregiver = getLastWeekCaregiver(clientData, actualSchedulingData);
+    var isLastWeekMandatory = settings.mandatory["Last Week Caregiver"];
+
+    if (isLastWeekMandatory && lastWeekCaregiver) {
+        var lastWeekCaregiverFound = null;
+        var otherCaregivers = [];
+
+        for (var i = 0; i < availableCaregivers.length; i++) {
+            var caregiver = availableCaregivers[i];
+            if (normName(caregiver.caregiverName) === normName(lastWeekCaregiver)) {
+                // Check if last week caregiver actually passed all requirements
+                var passedAllChecks = true;
+                for (var j = 0; j < caregiver.evaluationResults.length; j++) {
+                    var evalResult = caregiver.evaluationResults[j];
+                    // If any mandatory check failed, this caregiver is not suitable
+                    if (!evalResult.allowed) {
+                        passedAllChecks = false;
+                        break;
+                    }
+                }
+
+                if (passedAllChecks) {
+                    lastWeekCaregiverFound = caregiver;
+                    // Add debug info that last week caregiver was prioritized
+                    caregiver.evaluationResults.push({
+                        priority: 'Last Week Caregiver Priority',
+                        allowed: true,
+                        scoreAdjustment: 15, // Boost score for being last week's caregiver
+                        reason: 'prioritized_as_last_week_caregiver_and_meets_requirements'
+                    });
+                    caregiver.totalScore += 15;
+                    caregiver.priorityScore += 15;
+                } else {
+                    // Last week caregiver failed requirements, add to others list
+                    caregiver.evaluationResults.push({
+                        priority: 'Last Week Caregiver Check',
+                        allowed: false,
+                        scoreAdjustment: 0,
+                        reason: 'last_week_caregiver_failed_mandatory_requirements'
+                    });
+                    otherCaregivers.push(caregiver);
+                }
+            } else {
+                otherCaregivers.push(caregiver);
+            }
+        }
+
+        if (lastWeekCaregiverFound) {
+            // Last week caregiver meets requirements - prioritize them
+            availableCaregivers = [lastWeekCaregiverFound].concat(otherCaregivers);
+        } else {
+            // Last week caregiver doesn't meet requirements - proceed with normal assignment
+            availableCaregivers = otherCaregivers;
+
+            // Add debug information about why last week caregiver was not selected
+            result.debug = result.debug || {};
+            result.debug.lastWeekCaregiverRejection = result.debug.lastWeekCaregiverRejection || [];
+            result.debug.lastWeekCaregiverRejection.push({
+                clientId: clientData.id,
+                clientName: safeGetValue(clientData, 'fields.Client_Full_Name.value', ''),
+                lastWeekCaregiver: lastWeekCaregiver,
+                reason: 'last_week_caregiver_failed_mandatory_requirements',
+                date: dayObj.iso,
+                alternativeAssigned: availableCaregivers.length > 0 ? availableCaregivers[0].caregiverName : 'none'
+            });
+        }
+    }
+
+    if (availableCaregivers.length === 0) {
+        var clientFields = clientData.fields || {};
+        var hasStrictGenderReq = normStr(safeGetValue(clientFields, 'Gender_Preference_Strict.value', '')).toLowerCase() === 'yes';
+        var genderPref = normStr(safeGetValue(clientFields, 'Gender_Preference.value', '')).toLowerCase();
+
+        // Check if physical capability is mandatory in settings
+        var settings = getPrioritySettings(settingsTableData);
+        var isPhysicalMandatory = !!settings.mandatory["Caregiver Physical Capability"];
+
+        // Check what actually caused the failures
+        var physicalFailures = 0;
+        var genderFailures = 0;
+        var otherFailures = 0;
+
+        for (var i = 0; i < basicAvailableCaregivers.length; i++) {
+            var cg = basicAvailableCaregivers[i];
+
+            // Check gender failure
+            if (hasStrictGenderReq && genderPref && genderPref !== 'either') {
+                var genderResult = checkGenderPreference(cg.caregiverName, clientData, employeesDetails, true);
+                if (!genderResult.passes) {
+                    genderFailures++;
+                    continue;
+                }
+            }
+
+            // Check physical capability failure
+            var hasPhysicalReq = safeParseNumber(safeGetValue(clientFields, 'Physical_Capability_lbs.value', 0), 0) > 0 ||
+                normStr(safeGetValue(clientFields, 'Weight_Class.value', '')) !== '';
+
+            if (isPhysicalMandatory && hasPhysicalReq) {
+                var physResult = checkPhysicalCapability(cg.caregiverName, clientData, employeesDetails, true);
+                if (!physResult.passes) {
+                    physicalFailures++;
+                    continue;
+                }
+            }
+
+            // Other failures (skills, language, etc.)
+            otherFailures++;
+        }
+
+        // Only block for gender if strict and all available caregivers failed gender check
+        if (hasStrictGenderReq && genderPref && genderPref !== 'either' && genderFailures > 0 && (genderFailures + physicalFailures) === basicAvailableCaregivers.length) {
+            res.finalAvailabilityIssue = 'no_caregiver_available_due_to_strict_gender_preference';
+            res.debugReasons.push({
+                priority: 'Gender Preference',
+                allowed: false,
+                scoreAdjustment: 0,
+                reason: 'No caregiver matches gender preference (strict=yes, pref=' + genderPref + '). ' + genderFailures + ' caregivers failed gender check.'
+            });
+            return res;
+        }
+
+        // Only block for physical capability if mandatory AND caregivers specifically failed physical check
+        if (isPhysicalMandatory && physicalFailures > 0 && physicalFailures === basicAvailableCaregivers.length) {
+            res.finalAvailabilityIssue = 'no_caregiver_available_due_to_physical_capability';
+            res.debugReasons.push({
+                priority: 'Physical Capability',
+                allowed: false,
+                scoreAdjustment: 0,
+                reason: 'No caregiver matches required physical capability (mandatory in settings). ' + physicalFailures + ' caregivers failed physical check.'
+            });
+            return res;
+        }
+
+        // Otherwise, use fallback assignment
+        for (var i = 0; i < basicAvailableCaregivers.length; i++) {
+            var candidate = basicAvailableCaregivers[i];
+            candidate.status = 'Available (Fallback)';
+            candidate.totalScore = candidate.optionalScore;
+            candidate.priorityScore = 0;
+            candidate.evaluationResults.push({
+                priority: 'Fallback Assignment',
+                allowed: true,
+                scoreAdjustment: 0,
+                reason: 'assigned_as_fallback_due_to_no_priority_matches. Physical failures: ' + physicalFailures + ', Gender failures: ' + genderFailures + ', Other failures: ' + otherFailures
+            });
+            availableCaregivers.push(candidate);
+        }
+    }
+
+
+    if (availableCaregivers.length > 0) {
+        var rawMap = {};
+        for (var d = 0; d < dimensionStats.length; d++) {
+            rawMap[dimensionStats[d].caregiverName] = dimensionStats[d];
+        }
+
+        var maxLang = 0, maxSkills = 0, maxHist = 0, maxWork = 0;
+        for (var a = 0; a < availableCaregivers.length; a++) {
+            var rn = availableCaregivers[a].caregiverName;
+            var m = rawMap[rn];
+            if (!m) continue;
+            if (m.rawLanguage > maxLang) maxLang = m.rawLanguage;
+            if (m.rawSkills > maxSkills) maxSkills = m.rawSkills;
+            if (m.rawHistorical > maxHist) maxHist = m.rawHistorical;
+            if (m.rawWorkHours > maxWork) maxWork = m.rawWorkHours;
+        }
+
+        // Calculate actual worked hours for this client for each caregiver
+        var actualWorkedHoursMap = {};
+        var totalClientHours = 0;
+        for (var j = 0; j < actualSchedulingData.length; j++) {
+            var rec = actualSchedulingData[j];
+            if (!rec || !rec.fields) continue;
+            var f = rec.fields;
+            if (normName(safeGetValue(f, 'Client_Name.value', '')) === normName(clientName)) {
+                var hours = safeParseNumber(safeGetValue(f, 'Actual_Hours.value', 0), 0);
+                totalClientHours += hours;
+                var cgName = safeGetValue(f, 'Actual_Caregiver.value', '');
+                cgName = normStr(cgName);
+                if (cgName) {
+                    actualWorkedHoursMap[cgName] = (actualWorkedHoursMap[cgName] || 0) + hours;
+                }
+            }
+        }
+        // Now assign workHours score
+        for (var ai = 0; ai < availableCaregivers.length; ai++) {
+            var c = availableCaregivers[ai];
+            var worked = actualWorkedHoursMap[c.caregiverName] || 0;
+            var wWork = 0;
+            if (totalClientHours > 0) {
+                wWork = (worked / totalClientHours) * scoringWeights.workHours;
+            }
+            c.weightedBreakdown = c.weightedBreakdown || {};
+            c.weightedBreakdown.workHours = +wWork.toFixed(2);
+        }
+
+        // --- Modified language and skill scoring ---
+        availableCaregivers.forEach(function (c) {
+            var metrics = rawMap[c.caregiverName] || {};
+            var totalClientLangs = prefs.langs.length;
+            var totalClientSkills = prefs.skills.length;
+            var langScore = (totalClientLangs > 0)
+                ? (metrics.rawLanguage / totalClientLangs) * scoringWeights.language
+                : 0;
+            var skillScore = (totalClientSkills > 0)
+                ? (metrics.rawSkills / totalClientSkills) * scoringWeights.skills
+                : 0;
+            var histScore = maxHist ? (metrics.rawHistorical / maxHist) * scoringWeights.historical : 0;
+            var wWork = c.weightedBreakdown.workHours;
+
+            // Debug log for skills calculation
+            if (typeof console !== 'undefined' && console.log) {
+                console.log('DEBUG SKILLS:', {
+                    caregiver: c.caregiverName,
+                    rawSkills: metrics.rawSkills,
+                    totalClientSkills: totalClientSkills,
+                    scoringWeight: scoringWeights.skills,
+                    skillScore: skillScore
+                });
+            }
+
+            c.weightedBreakdown = {
+                language: +langScore.toFixed(2),
+                skills: +skillScore.toFixed(2),
+                historical: +histScore.toFixed(2),
+                workHours: +wWork.toFixed(2)
+            };
+            c.weightedTotalScore = +(langScore + skillScore + histScore + wWork).toFixed(2);
+        });
+
+        // --- Step 4: Enhanced sorting for transportation preference ---
+        availableCaregivers.sort(function (a, b) {
+            if (b.weightedTotalScore !== a.weightedTotalScore) return b.weightedTotalScore - a.weightedTotalScore;
+            if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+            if (b.totalScore !== a.totalScore) return b.totalScore - a.totalScore;
+            var aTransport = checkTransportationMatch(a.caregiverName, clientData, employeesDetails);
+            var bTransport = checkTransportationMatch(b.caregiverName, clientData, employeesDetails);
+            if (aTransport.isPreferred !== bTransport.isPreferred) {
+                return aTransport.isPreferred ? -1 : 1;
+            }
+            if (b.clientHours !== a.clientHours) return b.clientHours - a.clientHours;
+            if (b.globalHours !== a.globalHours) return b.globalHours - a.globalHours;
+            return a.caregiverName < b.caregiverName ? -1 : (a.caregiverName > b.caregiverName ? 1 : 0);
+        });
+    }
+
+    var availableCaregiversForList = [];
+
+    for (var i = 0; i < availableCaregivers.length; i++) {
+        var caregiver = availableCaregivers[i];
+
+        if (i === 0) {
+            caregiver.rank = 1;
+            caregiver.status = caregiver.status.indexOf('Fallback') !== -1 ? 'Selected (Fallback)' : 'Selected';
+        } else {
+            var isAvailableForAssignment = isCaregiverAvailable(
+                caregiver.caregiverName,
+                clientId,
+                dayObj.iso,
+                schedule.startTime,
+                schedule.endTime
+            );
+
+            if (isAvailableForAssignment) {
+                caregiver.rank = availableCaregiversForList.length + 2;
+                caregiver.status = caregiver.status.indexOf('Fallback') !== -1 ?
+                    'Available (Fallback) - Rank ' + caregiver.rank :
+                    'Available - Rank ' + caregiver.rank;
+                availableCaregiversForList.push(caregiver);
+            } else {
+                caregiver.rank = 0;
+                caregiver.status = 'Unavailable - Time Conflict';
+                caregiver.rejectionReason = 'time_slot_conflict';
+            }
+        }
+    }
+
+    // Update availableCaregiversList to only include weighted score info and basic identity
+    res.availableCaregiversList = availableCaregiversForList.map(function (c) {
+        return {
+            caregiverName: c.caregiverName,
+            caregiverEmployeeId: getCaregiverEmployeeId(c.caregiverName, employeesDetails),
+            weightedBreakdown: c.weightedBreakdown,
+            weightedTotalScore: c.weightedTotalScore,
+            rank: c.rank,
+            status: c.status
+        };
+    });
+
+    if (availableCaregivers.length > 0) {
+        var bestCandidate = availableCaregivers[0];
+        res.assignedCaregiver = bestCandidate.caregiverName;
+        res.isAvailable = true;
+        res.debugReasons = bestCandidate.evaluationResults;
+        res.assignedCaregiverScore = bestCandidate.weightedTotalScore != null
+            ? bestCandidate.weightedTotalScore
+            : bestCandidate.totalScore;
+
+        res.assignedCaregiverWeightedTotal = bestCandidate.weightedTotalScore;
+        res.assignedCaregiverWeightedBreakdown = bestCandidate.weightedBreakdown || null;
+
+        var assignmentKey = clientId + '_' + dayObj.iso + '_' + schedule.startTime;
+        globalAssignedCaregivers[assignmentKey] = bestCandidate.caregiverName;
+
+        // FIXED: Correct hours calculation with one decimal place
+        var shiftHours = Math.round(((schedule.endTime - schedule.startTime) / 60) * 10) / 10;
+        globalCaregiverHours[normName(bestCandidate.caregiverName)] =
+            (globalCaregiverHours[normName(bestCandidate.caregiverName)] || 0) + shiftHours;
+
+        clientCaregiverHours[bestCandidate.caregiverName] =
+            (clientCaregiverHours[bestCandidate.caregiverName] || 0) + shiftHours;
+
+        if (!globalCaregiverTimeSlots[bestCandidate.caregiverName]) {
+            globalCaregiverTimeSlots[bestCandidate.caregiverName] = [];
+        }
+
+        globalCaregiverTimeSlots[bestCandidate.caregiverName].push({
+            clientId: clientId,
+            date: dayObj.iso,
+            startTime: schedule.startTime,
+            endTime: schedule.endTime
+        });
+
+        if (primaryCaregiverName) {
+            res.primaryCaregiverChecked = true;
+        }
+    } else {
+        res.finalAvailabilityIssue = 'no_caregiver_available';
+        res.primaryCaregiverChecked = primaryCaregiverName ? true : false;
+
+        res.debugReasons.push({
+            priority: 'Assignment Result',
+            allowed: false,
+            scoreAdjustment: 0,
+            reason: 'No caregivers passed basic availability checks (time slot, leave status, conflicts, blocklist, max hours)'
+        });
+    }
+
+
+    return res;
+}
+
+function rebuildAvailableCaregiversList(clientAssignments) {
+    for (var c = 0; c < clientAssignments.length; c++) {
+        var clientAssignment = clientAssignments[c];
+        var clientId = clientAssignment.clientId;
+
+        for (var s = 0; s < clientAssignment.scheduledServices.length; s++) {
+            var service = clientAssignment.scheduledServices[s];
+            var availableList = service.availableCaregiversList;
+            var updatedList = [];
+
+            for (var i = 0; i < availableList.length; i++) {
+                var caregiver = availableList[i];
+
+                // FIX: Pass startTime and endTime to ghost shift check
+                if (isGhostCaregiverForDate(
+                    caregiver.caregiverName,
+                    service.date,
+                    service.startTime,
+                    service.endTime,
+                    ghostShifts
+                )) {
+                    continue;
+                }
+
+                var isAvailable = isCaregiverAvailable(
+                    caregiver.caregiverName,
+                    clientId,
+                    service.date,
+                    service.startTime,
+                    service.endTime
+                );
+
+                if (isAvailable) {
+                    updatedList.push(caregiver);
+                }
+            }
+
+            service.availableCaregiversList = updatedList;
+        }
+    }
+
+    return clientAssignments;
+}
+
+// ---------------------------------------------------------------------------
+// SCHEDULE BUILDING FUNCTIONS
+// ---------------------------------------------------------------------------
+
+function buildAllClientSchedules(allClientsData, clientSchedulesData, next7Days) {
+    var allSchedules = {};
+
+    for (var d = 0; d < next7Days.length; d++) {
+        var dayObj = next7Days[d];
+        allSchedules[dayObj.iso] = {};
+    }
+
+    var schedulesList = clientSchedulesData.data || [];
+
+    for (var i = 0; i < schedulesList.length; i++) {
+        var scheduleItem = schedulesList[i];
+        if (!scheduleItem || !scheduleItem.fields) continue;
+
+        var clientId = scheduleItem.refId;
+        var dayName = normStr(safeGetValue(scheduleItem.fields, 'Day.value', ''));
+        var startTimeStr = normStr(safeGetValue(scheduleItem.fields, 'Schedule_Start_Time.value', ''));
+        var endTimeStr = normStr(safeGetValue(scheduleItem.fields, 'Schedule_End_Time.value', ''));
+
+        var startTime = parseTime(startTimeStr);
+        var endTime = parseTime(endTimeStr);
+
+        if (startTime === null || endTime === null || startTime >= endTime) continue;
+
+        var clientName = '';
+        for (var c = 0; c < allClientsData.length; c++) {
+            var client = allClientsData[c];
+            if (client && client.id === clientId) {
+                clientName = safeGetValue(client.fields, 'Client_Full_Name.value', 'Unknown Client');
+                break;
+            }
+        }
+
+        for (var d2 = 0; d < next7Days.length; d2++) {
+            var dayObj = next7Days[d2];
+            if (normStr(dayObj.day).toUpperCase() === normStr(dayName).toUpperCase()) {
+                if (!allSchedules[dayObj.iso][clientId]) {
+                    allSchedules[dayObj.iso][clientId] = [];
+                }
+
+                allSchedules[dayObj.iso][clientId].push({
+                    clientName: clientName,
+                    startTime: startTime,
+                    endTime: endTime,
+                    startTimeStr: startTimeStr,
+                    endTimeStr: endTimeStr,
+                    day: dayName
+                });
+            }
+        }
+    }
+
+    return allSchedules;
+}
+
+function getClientSchedulesFromAPI(clientId, clientSchedulesData) {
+    var schedules = [];
+    var schedulesList = (clientSchedulesData && clientSchedulesData.data) ? clientSchedulesData.data : [];
+
+    for (var i = 0; i < schedulesList.length; i++) {
+        var scheduleItem = schedulesList[i];
+        if (!scheduleItem || !scheduleItem.fields) continue;
+        if (scheduleItem.refId !== clientId) continue;
+
+        var dayName = normStr(safeGetValue(scheduleItem.fields, 'Day.value', ''));
+        var startTimeStrRaw = normStr(safeGetValue(scheduleItem.fields, 'Schedule_Start_Time.value', ''));
+        var endTimeStrRaw = normStr(safeGetValue(scheduleItem.fields, 'Schedule_End_Time.value', ''));
+
+        var startTime = parseTime(startTimeStrRaw);
+        var endTime = parseTime(endTimeStrRaw);
+
+        if (startTime === null || endTime === null) continue;
+        if (startTime >= endTime) continue;
+
+        schedules.push({
+            day: dayName,
+            startTime: startTime,
+            endTime: endTime,
+            startTimeStr: minutesToHHMM(startTime),
+            endTimeStr: minutesToHHMM(endTime)
+        });
+    }
+
+    return schedules;
+}
+// ---------------------------------------------------------------------------
+// MAIN PROCESSING LOGIC
+// ---------------------------------------------------------------------------
+
+var next7Days = getNext7Days(currDate);
+if (!next7Days || next7Days.length === 0) {
+    result.error = "Failed to generate next 7 days";
+    return result;
+}
+
+var allClientSchedules = buildAllClientSchedules(allClientsScheduleData, clientSchedules, next7Days);
+
+var globalAssignedCaregivers = {};
+
+function getClientType(rec) {
+    var v = normStr(safeGetValue(rec, 'fields.Client_Type.value', ''));
+    return (v && v.toUpperCase() === 'PRIVATE') ? 'Private' : 'Facility';
+}
+
+var clientsToProcess = allClientsScheduleData.slice();
+clientsToProcess.sort(function (a, b) {
+    var ta = getClientType(a);
+    var tb = getClientType(b);
+    if (ta !== tb) return ta === 'Private' ? -1 : 1;
+    var na = normStr(safeGetValue(a, 'fields.Client_Full_Name.value', ''));
+    var nb = normStr(safeGetValue(b, 'fields.Client_Full_Name.value', ''));
+    return na < nb ? -1 : (na > nb ? 1 : 0);
+});
+
+var globalCaregiverHours = {};
+var employeeNameMap = {}; // Pre-computed lookup map
+for (var emp_i = 0; emp_i < employeesDetails.length; emp_i++) {
+    var emp_rec = employeesDetails[emp_i];
+    var emp_name = safeGetValue(emp_rec, 'fields.Employee_Full_Name.value', '');
+    if (emp_name) {
+        employeeNameMap[normName(emp_name)] = emp_rec;
+    }
+}
+
+// ADD THIS CLIENT LEAVE MAP (after the employee map)
+var clientLeaveMap = {}; // Pre-computed leave lookup by clientId and date
+if (clientLeaves && clientLeaves.data) {
+    for (var cl_i = 0; cl_i < clientLeaves.data.length; cl_i++) {
+        var leave = clientLeaves.data[cl_i];
+        if (!leave || !leave.fields) continue;
+
+        var leaveClientId = safeGetValue(leave.fields, 'Client_Name.value', '');
+        var leaveStatus = safeGetValue(leave.fields, 'Leave_Status.value', '');
+
+        if (leaveStatus === "Approved") {
+            if (!clientLeaveMap[leaveClientId]) {
+                clientLeaveMap[leaveClientId] = [];
+            }
+            clientLeaveMap[leaveClientId].push(leave);
+        }
+    }
+}
+
+for (var clientIndex = 0; clientIndex < clientsToProcess.length; clientIndex++) {
+    var clientData = clientsToProcess[clientIndex];
+    if (!clientData || !clientData.fields) continue;
+
+    var clientName = safeGetValue(clientData, 'fields.Client_Full_Name.value', '');
+    var clientId = clientData.id || '';
+    var primaryCaregiverName = safeGetValue(clientData, 'fields.Primary_Caregiver.value', '');
+
+    var clientScheduleRows = getClientSchedulesFromAPI(clientId, clientSchedules);
+    var clientScheduledServices = [];
+    var clientConflicts = [];
+    var clientAvailabilityIssues = [];
+
+    for (var dayIndex = 0; dayIndex < next7Days.length; dayIndex++) {
+        var dayObj = next7Days[dayIndex];
+
+        for (var scheduleIndex = 0; scheduleIndex < clientScheduleRows.length; scheduleIndex++) {
+            var schedule = clientScheduleRows[scheduleIndex];
+
+            if (schedule.day === dayObj.day) {
+                var assignmentResult = assignCaregiverToSchedule(
+                    clientData,
+                    dayObj,
+                    schedule,
+                    employeesDetails,
+                    leavesData,
+                    allClientSchedules,
+                    globalAssignedCaregivers,
+                    {},
+                    globalCaregiverHours,
+                    actualSchedulingData
+                );
+                if (!assignmentResult) {
+                    continue;
+                }
+
+                var assignedCaregiver = assignmentResult.assignedCaregiver;
+                var isAvailable = assignmentResult.isAvailable;
+                var conflictsFound = assignmentResult.conflictsFound;
+                var availabilityIssues = assignmentResult.availabilityIssues;
+
+                if (conflictsFound.length > 0) {
+                    clientConflicts = clientConflicts.concat(conflictsFound);
+                }
+
+                if (!isAvailable && availabilityIssues.length > 0) {
+                    clientAvailabilityIssues = clientAvailabilityIssues.concat(availabilityIssues);
+                }
+
+
+                var serviceTime = schedule.startTimeStr + " - " + schedule.endTimeStr;
+                var requestedHours = Math.round(((schedule.endTime - schedule.startTime) / 60) * 10) / 10;
+                var finalCaregiverName = isAvailable ? assignedCaregiver : "Unassigned";
+                var caregiverAvailabilityStatus = isAvailable ? "Available" : "Not Available";
+                var shiftStatus = isAvailable ? "Scheduled" : "Open Shift";
+                var isPrimaryAssigned = isAvailable && primaryCaregiverName &&
+                    normName(assignedCaregiver) === normName(primaryCaregiverName);
+
+                var finalCaregiverQBID = isAvailable ? getCaregiverQBID(assignedCaregiver, employeesDetails) : '';
+                var finalCaregiverEmployeeId = isAvailable ? getCaregiverEmployeeId(assignedCaregiver, employeesDetails) : '';
+
+                var serviceObj = {
+                    clientId: clientId,
+                    clientName: clientName || "Unknown Client",
+                    caregiverName: finalCaregiverName,
+                    caregiverQBID: finalCaregiverQBID,
+                    caregiverEmployeeId: finalCaregiverEmployeeId,
+                    day: dayObj.day,
+                    date: dayObj.iso,
+                    serviceTime: serviceTime,
+                    startTime: schedule.startTime,
+                    endTime: schedule.endTime,
+                    caregiverAvailability: caregiverAvailabilityStatus,
+                    shiftStatus: shiftStatus,
+                    conflictsCount: conflictsFound.length,
+                    availabilityIssue: assignmentResult.finalAvailabilityIssue,
+                    caregiverIssuesEncountered: availabilityIssues.length,
+                    isPrimaryCaregiver: isPrimaryAssigned,
+                    primaryCaregiverChecked: assignmentResult.primaryCaregiverChecked,
+                    clientRequestedHours: Math.round(requestedHours * 100) / 100,
+                    availableCaregiversList: assignmentResult.availableCaregiversList || [],
+                    weightedScore: assignmentResult.assignedCaregiverWeightedTotal || null,
+                    weightedBreakdown: assignmentResult.assignedCaregiverWeightedBreakdown || null,
+                    assignmentMethod: assignmentResult.assignmentMethod || 'normal' // NEW: Track assignment method
+                };
+
+                if (isAvailable) {
+                    serviceObj.caregiverScheduledHours = requestedHours;
+                }
+
+                clientScheduledServices.push(serviceObj);
+            }
+        }
+    }
+
+    result.allClientAssignments.push({
+        clientId: clientId,
+        clientName: clientName,
+        primaryCaregiverName: primaryCaregiverName,
+        scheduledServices: clientScheduledServices,
+        conflicts: {
+            total: clientConflicts.length,
+            details: clientConflicts
+        },
+        availabilityIssues: {
+            total: clientAvailabilityIssues.length,
+            details: clientAvailabilityIssues
+        }
+    });
+
+    result.conflicts.total += clientConflicts.length;
+    result.conflicts.details = result.conflicts.details.concat(clientConflicts);
+    result.availabilityIssues.total += clientAvailabilityIssues.length;
+    result.availabilityIssues.details = result.availabilityIssues.details.concat(clientAvailabilityIssues);
+}
+
+result.allClientAssignments = rebuildAvailableCaregiversList(result.allClientAssignments);
+
+// REBUILD ghostShiftBlocklistArr after availableCaregiversList is finalized
+ghostShiftBlocklistArr = [];
+for (var c = 0; c < result.allClientAssignments.length; c++) {
+    var clientAssignment = result.allClientAssignments[c];
+    for (var s = 0; s < clientAssignment.scheduledServices.length; s++) {
+        var service = clientAssignment.scheduledServices[s];
+        var availableList = service.availableCaregiversList || [];
+        for (var i = 0; i < availableList.length; i++) {
+            var caregiver = availableList[i];
+            ghostShiftBlocklistArr.push({
+                caregiverName: caregiver.caregiverName,
+                date: service.date,
+                startTime: service.startTime,
+                endTime: service.endTime
+            });
+        }
+    }
+}
+
+// Now assign ghost shifts using the updated blocklist
+var ghostShifts = createGhostShifts(next7Days, employeesDetails);
+result.ghostShifts = ghostShifts;
+
+var totalScheduledServices = 0;
+var totalSuccessfulAssignments = 0;
+var totalOpenShifts = 0;
+var uniqueCaregiversUsed = {};
+
+for (var c = 0; c < result.allClientAssignments.length; c++) {
+    var clientAssignment = result.allClientAssignments[c];
+    totalScheduledServices += clientAssignment.scheduledServices.length;
+
+    for (var s = 0; s < clientAssignment.scheduledServices.length; s++) {
+        var service = clientAssignment.scheduledServices[s];
+        if (service.shiftStatus === "Scheduled") {
+            totalSuccessfulAssignments++;
+        } else {
+            totalOpenShifts++;
+        }
+
+        if (service.caregiverName && service.caregiverName !== "Unassigned") {
+            uniqueCaregiversUsed[service.caregiverName] = true;
+        }
+    }
+}
+
+var doubleBookingCount = 0;
+var otherConflictCount = 0;
+
+for (var i = 0; i < result.conflicts.details.length; i++) {
+    var conflict = result.conflicts.details[i];
+    if (conflict.conflictType === 'time_overlap') {
+        doubleBookingCount++;
+    } else {
+        otherConflictCount++;
+    }
+}
+
+
+result.globalSummary = {
+    totalClients: result.allClientAssignments.length,
+    totalScheduledServices: totalScheduledServices,
+    totalSuccessfulAssignments: totalSuccessfulAssignments,
+    totalOpenShifts: totalOpenShifts,
+    totalConflicts: result.conflicts.total,
+    totalAvailabilityIssues: result.availabilityIssues.total,
+    uniqueCaregiversUsed: Object.keys(uniqueCaregiversUsed).length,
+    caregiverNames: Object.keys(uniqueCaregiversUsed),
+    globalSuccessRate: totalScheduledServices > 0 ?
+        (totalSuccessfulAssignments / totalScheduledServices * 100).toFixed(1) + '%' : '0%'
+};
+
+var caregiverUtilization = {};
+var caregiverHoursUtilization = {};
+
+result.globalSummary.totalGhostShifts = ghostShifts.length;
+
+result.globalSummary.filledGhostShifts = ghostShifts.filter(function (shift) {
+    return shift.caregiverName !== '';
+}).length;
+result.globalSummary.emptyGhostShifts = ghostShifts.filter(function (shift) {
+    return shift.caregiverName === '';
+}).length;
+
+result.globalSummary.ghostPoolSize = getEligibleGhostCaregivers(employeesDetails).length;
+result.globalSummary.ghostShiftsPerDay = ghostShifts.length / next7Days.length;
+
+result.ghostShiftStats = {
+    totalGhostShifts: ghostShifts.length,
+    filledGhostShifts: ghostShifts.filter(function (shift) { return shift.caregiverName !== ''; }).length,
+    emptyGhostShifts: ghostShifts.filter(function (shift) { return shift.caregiverName === ''; }).length,
+    ghostPoolSize: getEligibleGhostCaregivers(employeesDetails).length,
+    shiftsPerDay: ghostShifts.length / next7Days.length
+};
+
+for (var c = 0; c < result.allClientAssignments.length; c++) {
+    var clientAssignment = result.allClientAssignments[c];
+
+    for (var s = 0; s < clientAssignment.scheduledServices.length; s++) {
+        var service = clientAssignment.scheduledServices[s];
+        if (service.caregiverName && service.caregiverName !== "Unassigned") {
+            caregiverUtilization[service.caregiverName] = (caregiverUtilization[service.caregiverName] || 0) + 1;
+
+            if (service.caregiverScheduledHours) {
+                caregiverHoursUtilization[service.caregiverName] =
+                    (caregiverHoursUtilization[service.caregiverName] || 0) + service.caregiverScheduledHours;
+            }
+        }
+    }
+}
+result.globalSummary.doubleBookingCount = doubleBookingCount;
+result.globalSummary.otherConflictCount = otherConflictCount;
+
+result.caregiverUtilization = caregiverUtilization;
+result.caregiverHoursUtilization = caregiverHoursUtilization;
+
+result.debug.processedClients = result.allClientAssignments.length;
+result.debug.globalAssignments = Object.keys(globalAssignedCaregivers).length;
+result.debug.next7DaysCount = next7Days.length;
+
+return result;

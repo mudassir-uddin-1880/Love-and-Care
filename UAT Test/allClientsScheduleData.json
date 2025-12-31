@@ -1,0 +1,325 @@
+{
+    "allClientsScheduleData": [
+        {
+            "id": "68e78dd46043b73ad66fa5ec",
+            "fields": {
+                "Personality_Match": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": "Pleasant but soft-spoken"
+                },
+                "Slot_Code": {
+                    "type": "editTextUiTemplate",
+                    "value": ""
+                },
+                "Transportation_Needed_": {
+                    "type": "radioButtonUiTemplate",
+                    "value": "Yes"
+                },
+                "JobCode_Id": {
+                    "type": "editTextUiTemplate",
+                    "value": "39567278"
+                },
+                "Phone_Number": {
+                    "maskedValue": "",
+                    "type": "encryptUiTemplate",
+                    "value": "rg6GQIAm6t/Ys6Q/nq/XpQJaMfNB2NycmLAqM6/JhoY="
+                },
+                "Gender": {
+                    "type": "radioButtonUiTemplate",
+                    "value": ""
+                },
+                "Client_Full_Name": {
+                    "type": "editTextUiTemplate",
+                    "value": "Douglas Hall"
+                },
+                "Schedule_Details": {
+                    "type": "tableUiTemplate",
+                    "value": "68a4441312e48bf5bbd3a68c"
+                },
+                "Tertiary_Caregiver": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": ""
+                },
+                "Client_Type": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": "Private"
+                },
+                "Transfer_Assistance_Level": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": ""
+                },
+                "Gender_Preference": {
+                    "type": "radioButtonUiTemplate",
+                    "value": "Either"
+                },
+                "Effective_From": {
+                    "type": "datePickerUiTemplate",
+                    "value": "2025-10-01"
+                },
+                "Skills_Preferences": {
+                    "type": "multiSelectUiTemplate"
+                },
+                "Caregiver_Block_List": {
+                    "type": "multiSelectUiTemplate",
+                    "value": [
+                        "Jesus Hernandez"
+                    ]
+                },
+                "Physical_Capability_lbs": {
+                    "type": "numberUiTemplate",
+                    "value": 0
+                },
+                "Gender_Preference_Strict": {
+                    "type": "radioButtonUiTemplate",
+                    "value": "No"
+                },
+                "Effective_To": {
+                    "type": "datePickerUiTemplate",
+                    "value": "2030-10-01"
+                },
+                "Primary_Caregiver": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": ""
+                },
+                "ID": {
+                    "type": "autoNumberUiTemplate",
+                    "value": "CL-94"
+                },
+                "Weight_Class": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": "Standard"
+                },
+                "Default_Service_Type": {
+                    "type": "editTextUiTemplate",
+                    "value": ""
+                },
+                "Secondary_Caregiver": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": ""
+                },
+                "Language_Preferences": {
+                    "type": "multiSelectUiTemplate",
+                    "value": [
+                        "English"
+                    ]
+                }
+            },
+            "draftMode": false,
+            "createAssetLibrary": false,
+            "draftToActiveMode": false
+        },
+        {
+            "id": "68e78dd46043b73ad66fa5e3",
+            "fields": {
+                "Personality_Match": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": "Pleasant yet demanding"
+                },
+                "Slot_Code": {
+                    "type": "editTextUiTemplate",
+                    "value": ""
+                },
+                "Transportation_Needed_": {
+                    "type": "radioButtonUiTemplate",
+                    "value": "Yes"
+                },
+                "JobCode_Id": {
+                    "type": "editTextUiTemplate",
+                    "value": "43762906"
+                },
+                "Phone_Number": {
+                    "maskedValue": "",
+                    "type": "encryptUiTemplate",
+                    "value": "1JIJWxFOKFm0+6+XrJAziviaOBtfYaDqrrq7aBcQCIs="
+                },
+                "Gender": {
+                    "type": "radioButtonUiTemplate",
+                    "value": ""
+                },
+                "Client_Full_Name": {
+                    "type": "editTextUiTemplate",
+                    "value": "Carmela Jurgens"
+                },
+                "Schedule_Details": {
+                    "type": "tableUiTemplate",
+                    "value": "68a4441312e48bf5bbd3a68c"
+                },
+                "Tertiary_Caregiver": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": ""
+                },
+                "Client_Type": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": "Private"
+                },
+                "Transfer_Assistance_Level": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": ""
+                },
+                "Gender_Preference": {
+                    "type": "radioButtonUiTemplate",
+                    "value": "Female"
+                },
+                "Effective_From": {
+                    "type": "datePickerUiTemplate",
+                    "value": "2025-10-01"
+                },
+                "Skills_Preferences": {
+                    "type": "multiSelectUiTemplate"
+                },
+                "Caregiver_Block_List": {
+                    "type": "multiSelectUiTemplate"
+                },
+                "Physical_Capability_lbs": {
+                    "type": "numberUiTemplate",
+                    "value": 0
+                },
+                "Gender_Preference_Strict": {
+                    "type": "radioButtonUiTemplate",
+                    "value": "Yes"
+                },
+                "Effective_To": {
+                    "type": "datePickerUiTemplate",
+                    "value": "2030-10-01"
+                },
+                "Primary_Caregiver": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": ""
+                },
+                "ID": {
+                    "type": "autoNumberUiTemplate",
+                    "value": "CL-90"
+                },
+                "Weight_Class": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": "Standard"
+                },
+                "Default_Service_Type": {
+                    "type": "editTextUiTemplate",
+                    "value": ""
+                },
+                "Secondary_Caregiver": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": ""
+                },
+                "Language_Preferences": {
+                    "type": "multiSelectUiTemplate",
+                    "value": [
+                        "English"
+                    ]
+                }
+            },
+            "draftMode": false,
+            "createAssetLibrary": false,
+            "draftToActiveMode": false
+        },
+        {
+            "id": "68e78dd46043b73ad66fa5e2",
+            "fields": {
+                "Personality_Match": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": "Pleasant yet demanding"
+                },
+                "Slot_Code": {
+                    "type": "editTextUiTemplate",
+                    "value": ""
+                },
+                "Transportation_Needed_": {
+                    "type": "radioButtonUiTemplate",
+                    "value": "Yes"
+                },
+                "JobCode_Id": {
+                    "type": "editTextUiTemplate",
+                    "value": "43053100"
+                },
+                "Phone_Number": {
+                    "maskedValue": "",
+                    "type": "encryptUiTemplate",
+                    "value": "RXKFvnkUA6u4qhBbWyOW2btiiXVeGdSZteTXSzxipSs="
+                },
+                "Gender": {
+                    "type": "radioButtonUiTemplate",
+                    "value": ""
+                },
+                "Client_Full_Name": {
+                    "type": "editTextUiTemplate",
+                    "value": "Barbara Robbins"
+                },
+                "Schedule_Details": {
+                    "type": "tableUiTemplate",
+                    "value": "68a4441312e48bf5bbd3a68c"
+                },
+                "Tertiary_Caregiver": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": ""
+                },
+                "Client_Type": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": "Private"
+                },
+                "Transfer_Assistance_Level": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": ""
+                },
+                "Gender_Preference": {
+                    "type": "radioButtonUiTemplate",
+                    "value": "Either"
+                },
+                "Effective_From": {
+                    "type": "datePickerUiTemplate",
+                    "value": "2025-10-01"
+                },
+                "Skills_Preferences": {
+                    "type": "multiSelectUiTemplate"
+                },
+                "Caregiver_Block_List": {
+                    "type": "multiSelectUiTemplate",
+                    "value": [
+                        "Roger Vera"
+                    ]
+                },
+                "Physical_Capability_lbs": {
+                    "type": "numberUiTemplate",
+                    "value": 0
+                },
+                "Gender_Preference_Strict": {
+                    "type": "radioButtonUiTemplate",
+                    "value": "No"
+                },
+                "Effective_To": {
+                    "type": "datePickerUiTemplate",
+                    "value": "2030-10-01"
+                },
+                "Primary_Caregiver": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": ""
+                },
+                "ID": {
+                    "type": "autoNumberUiTemplate",
+                    "value": "CL-89"
+                },
+                "Weight_Class": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": "Standard"
+                },
+                "Default_Service_Type": {
+                    "type": "editTextUiTemplate",
+                    "value": ""
+                },
+                "Secondary_Caregiver": {
+                    "type": "singleChoiceUiTemplate",
+                    "value": ""
+                },
+                "Language_Preferences": {
+                    "type": "multiSelectUiTemplate",
+                    "value": [
+                        "English"
+                    ]
+                }
+            },
+            "draftMode": false,
+            "createAssetLibrary": false,
+            "draftToActiveMode": false
+        }
+    ]
+}

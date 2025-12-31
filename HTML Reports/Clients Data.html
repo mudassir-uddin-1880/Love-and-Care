@@ -1,0 +1,14 @@
+#set($serviceType = "SVC_TYPE_2")
+#set($incFields = ["Client_Full_Name"])
+#set($filters = {})
+#set($fieldsFilter = {"Client_Status" : "Active"})
+#set($filters.fields = $fieldsFilter)
+#set($minorIncidentsList = $dataReader.filter($serviceType, $incFields, $filters))
+Client Full Name,Day,Schedule Start Time,Schedule End Time,Expected Hours,Caregivers Required
+#foreach($record in $minorIncidentsList)
+#set($txn = $lookup.dataOf("$record.id", "SVC_TYPE_2"))
+#set($tableData = $txn.tables["68a4441312e48bf5bbd3a68c"])
+#foreach($row in $tableData)
+$record.fields.Client_Full_Name.value,$row.fields.Day.value,$row.fields.Schedule_Start_Time.value,$row.fields.Schedule_End_Time.value,$row.fields.Expected_Hours.value,$row.fields.Caregivers_Required.value
+#end
+#end
